@@ -1,0 +1,12 @@
+`.venv/
+venv/
+.env
+*.log
+__pycache__/
+*.pyc
+/build/
+/dist/
+data/*.json
+z:\\Documents\\RokuVideoServer\\*.bak
+.vscode/
+`
