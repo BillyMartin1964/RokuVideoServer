@@ -1,5 +1,7 @@
 import os
+import shutil
 import subprocess
+import tempfile
 import time
 import services.ffmpeg_service as ffmpeg_service
 from config import (
@@ -148,15 +150,16 @@ def run_ffmpeg_thumbnail(file_path, thumb_path, seek_seconds):
 
 
 def run_quicklook_thumbnail(file_path, thumb_path):
+    # Isolated temp folder per process prevents race conditions during multi-threaded batch scanning
+    temp_dir = tempfile.mkdtemp(dir=THUMB_CACHE_DIR)
     try:
-        before_files = set(os.listdir(THUMB_CACHE_DIR))
         cmd = [
             "/usr/bin/qlmanage",
             "-t",
             "-s",
             str(THUMB_WIDTH),
             "-o",
-            THUMB_CACHE_DIR,
+            temp_dir,
             file_path,
         ]
         subprocess.run(
@@ -166,46 +169,42 @@ def run_quicklook_thumbnail(file_path, thumb_path):
             text=True,
             timeout=THUMBNAIL_TIMEOUT_SECONDS,
         )
-        after_files = set(os.listdir(THUMB_CACHE_DIR))
-        new_files = [
-            f
-            for f in (after_files - before_files)
-            if f.lower().endswith(".png")
-        ]
 
-        for filename in new_files:
-            source_thumbnail = os.path.join(THUMB_CACHE_DIR, filename)
-            if (
-                os.path.exists(source_thumbnail)
-                and os.path.getsize(source_thumbnail) > 0
-            ):
-                convert_result = subprocess.run(
-                    [
-                        "/usr/bin/sips",
-                        "-s",
-                        "format",
-                        "jpeg",
-                        source_thumbnail,
-                        "--out",
-                        thumb_path,
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=10,
-                )
-                if (
-                    convert_result.returncode == 0
-                    and os.path.exists(thumb_path)
-                    and os.path.getsize(thumb_path) > 0
-                ):
-                    try:
-                        os.remove(source_thumbnail)
-                    except Exception:
-                        pass
-                    return True
-    except Exception:
-        pass
+        generated_pngs = [
+            f for f in os.listdir(temp_dir) if f.lower().endswith(".png")
+        ]
+        if not generated_pngs:
+            return False
+
+        source_thumbnail = os.path.join(temp_dir, generated_pngs[0])
+        if (
+            os.path.exists(source_thumbnail)
+            and os.path.getsize(source_thumbnail) > 0
+        ):
+            convert_result = subprocess.run(
+                [
+                    "/usr/bin/sips",
+                    "-s",
+                    "format",
+                    "jpeg",
+                    source_thumbnail,
+                    "--out",
+                    thumb_path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            )
+            return (
+                convert_result.returncode == 0
+                and os.path.exists(thumb_path)
+                and os.path.getsize(thumb_path) > 0
+            )
+    except Exception as ex:
+        log(f"<!> QuickLook failed for {os.path.basename(file_path)}: {ex}")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
     return False
 
 

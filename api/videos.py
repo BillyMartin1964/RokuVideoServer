@@ -10,25 +10,6 @@ from services.video_service import (
 )
 
 
-def handle_get_health(handler):
-    with CACHE_LOCK:
-        total_videos = len(config.FILES_LIST)
-
-    handler.send_json_response(
-        {
-            "success": True,
-            "server": "Roku Media Hub",
-            "ffmpegFound": config.FFMPEG_PATH is not None,
-            "ffmpegPath": config.FFMPEG_PATH,
-            "ffprobeFound": config.FFPROBE_PATH is not None,
-            "ffprobePath": config.FFPROBE_PATH,
-            "thumbnailDirectory": config.THUMB_CACHE_DIR,
-            "videoCount": total_videos,
-            "uptimeSeconds": round(time.time() - config.SERVER_START_TIME, 1),
-        }
-    )
-
-
 def handle_get_files(handler, query_params, start_time):
     drive_filter = query_params.get("drive", [None])[0]
     subfolder_filter = query_params.get("subfolder", [None])[0]
@@ -187,9 +168,32 @@ def handle_delete_file(handler, file_id):
         if src_path and os.path.exists(src_path):
             try:
                 os.remove(src_path)
-            except Exception as ex:
+            except (PermissionError, FileNotFoundError, OSError) as ex:
                 log(f"<!> Error deleting file: {type(ex).__name__}: {ex}")
-                handler.send_error(500, "Unable to delete file")
+                if isinstance(ex, PermissionError):
+                    handler.send_json_response(
+                        {
+                            "success": False,
+                            "error": "Permission denied when deleting file.",
+                        },
+                        status=403,
+                    )
+                elif isinstance(ex, FileNotFoundError):
+                    handler.send_json_response(
+                        {
+                            "success": False,
+                            "error": "File not found when attempting delete.",
+                        },
+                        status=404,
+                    )
+                else:
+                    handler.send_json_response(
+                        {
+                            "success": False,
+                            "error": f"Unable to delete file: {type(ex).__name__}: {ex}",
+                        },
+                        status=500,
+                    )
                 return
 
         with CACHE_LOCK:
@@ -202,7 +206,9 @@ def handle_delete_file(handler, file_id):
         )
         return
 
-    handler.send_error(400, "Invalid File ID")
+    handler.send_json_response(
+        {"success": False, "error": "Invalid File ID"}, status=400
+    )
 
 
 def stream_video_file(handler, file_path, send_body=True):
@@ -309,3 +315,28 @@ def stream_video_file(handler, file_path, send_body=True):
                 handler.wfile.write(chunk)
     except BrokenPipeError:
         log("--> Video client disconnected.")
+
+
+def handle_get_health(handler):
+    with CACHE_LOCK:
+        total_videos = len(config.FILES_LIST)
+
+    ffmpeg_path = getattr(config, "FFMPEG_PATH", None)
+    ffprobe_path = getattr(config, "FFPROBE_PATH", None)
+
+    handler.send_json_response(
+        {
+            "success": True,
+            "server": "Roku Media Hub",
+            "ffmpegFound": ffmpeg_path is not None,
+            "ffmpegPath": ffmpeg_path,
+            "ffprobeFound": ffprobe_path is not None,
+            "ffprobePath": ffprobe_path,
+            "thumbnailDirectory": config.THUMB_CACHE_DIR,
+            "videoCount": total_videos,
+            "uptimeSeconds": round(
+                time.time() - config.SERVER_START_TIME,
+                1,
+            ),
+        }
+    )
