@@ -14,6 +14,19 @@ PLAYBACK_POSITIONS_FILE = os.path.join(
     os.path.dirname(__file__), "data", "playback.json"
 )
 
+# FFmpeg / FFprobe Paths
+FFMPEG_PATHS = [
+    "/opt/homebrew/bin/ffmpeg",
+    "/usr/local/bin/ffmpeg",
+    "/usr/bin/ffmpeg",
+]
+
+FFPROBE_PATHS = [
+    "/opt/homebrew/bin/ffprobe",
+    "/usr/local/bin/ffprobe",
+    "/usr/bin/ffprobe",
+]
+
 # Stream & Scan Settings
 CHUNK_SIZE = 512 * 1024
 REFRESH_INTERVAL_SECONDS = 600

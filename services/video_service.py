@@ -1,28 +1,38 @@
-import os
-import json
-import time
 import hashlib
+import json
+import os
 import subprocess
+import sys
+import time
+
+# Ensure project root (~/Documents/RokuVideoServer/) is in sys.path for absolute imports
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import config
 from config import (
-    log,
+    ALLOWED_EXTENSIONS,
     CACHE_LOCK,
     FILE_CACHE_FILE,
-    VOLUMES_DIR,
-    ALLOWED_EXTENSIONS,
     IGNORED_DIRS,
     IGNORED_EXTENSIONS,
-    VIDEO_FORMATS,
     REFRESH_INTERVAL_SECONDS,
+    VIDEO_FORMATS,
+    VOLUMES_DIR,
+    log,
 )
-import services.ffmpeg_service as ffmpeg_service
+from models.video_model import create_video_model
+from services import ffmpeg_service
 
 
-def get_file_id(full_path):
-    return hashlib.md5(full_path.encode("utf-8")).hexdigest()
+def get_file_id(full_path: str) -> str:
+    """Generates a deterministic unique ID based on the normalized file path."""
+    normalized_path = os.path.abspath(full_path).lower()
+    return hashlib.md5(normalized_path.encode("utf-8")).hexdigest()
 
 
-def get_video_format_info(file_path):
+def get_video_format_info(file_path: str) -> dict:
     extension = os.path.splitext(file_path)[1].lower()
     info = VIDEO_FORMATS.get(extension)
     if info:
@@ -38,8 +48,9 @@ def get_video_format_info(file_path):
     }
 
 
-def add_media_metadata(item_data, file_path):
+def add_media_metadata(item_data: dict, file_path: str):
     format_info = get_video_format_info(file_path)
+    item_data["ext"] = format_info["extension"]
     item_data["extension"] = format_info["extension"]
     item_data["streamFormat"] = format_info["streamFormat"]
     item_data["contentType"] = format_info["contentType"]
@@ -61,17 +72,24 @@ def load_disk_cache():
         if not isinstance(data, list):
             return
 
+        normalized_list = []
+        normalized_map = {}
+
+        for item in data:
+            if isinstance(item, dict):
+                # Standardize through VideoModel contract
+                model_dict = create_video_model(item).model_dump()
+                file_id = model_dict.get("id")
+                if file_id:
+                    normalized_list.append(model_dict)
+                    normalized_map[file_id] = model_dict
+
         with CACHE_LOCK:
-            config.FILES_LIST = data
-            config.FILE_MAP = {
-                item["id"]: item
-                for item in data
-                if isinstance(item, dict) and "id" in item
-            }
-        log(
-            f"--> Loaded {len(config.FILES_LIST)} indexed videos from SSD cache."
-        )
-    except Exception as ex:
+            config.FILES_LIST = normalized_list
+            config.FILE_MAP = normalized_map
+
+        log(f"--> Loaded {len(config.FILES_LIST)} indexed videos from SSD cache.")
+    except (OSError, json.JSONDecodeError, ValueError) as ex:
         log(f"<!> Error reading video catalog cache: {type(ex).__name__}: {ex}")
 
 
@@ -86,85 +104,76 @@ def save_disk_cache():
 
         os.replace(temp_file, FILE_CACHE_FILE)
         log("--> Updated SSD disk cache file.")
-    except Exception as ex:
+    except (OSError, TypeError, ValueError) as ex:
         log(f"<!> Error writing SSD disk cache: {type(ex).__name__}: {ex}")
 
 
 def try_spotlight_index_scan():
-    query = " || ".join(
-        [f"kMDItemFSName == '*{ext}'" for ext in ALLOWED_EXTENSIONS]
-    )
+    query = " || ".join([f"kMDItemFSName == '*{ext}'" for ext in ALLOWED_EXTENSIONS])
     cmd = ["mdfind", "-onlyin", VOLUMES_DIR, query]
     try:
         result = subprocess.run(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            capture_output=True,
             text=True,
             timeout=15,
+            check=False,
         )
-        paths = [
-            p.strip() for p in result.stdout.splitlines() if p.strip()
-        ]
+        paths = [p.strip() for p in result.stdout.splitlines() if p.strip()]
 
         new_list, new_map = [], {}
         for full_path in paths:
             path_lower = full_path.lower()
-            if any(
-                part.startswith(".") for part in full_path.split("/")
-            ):
+            if any(part.startswith(".") for part in full_path.split("/")):
                 continue
             if any(ignored in path_lower for ignored in IGNORED_DIRS):
                 continue
-            if any(
-                ignored_ext in path_lower
-                for ignored_ext in IGNORED_EXTENSIONS
-            ):
+            if any(ignored_ext in path_lower for ignored_ext in IGNORED_EXTENSIONS):
                 continue
             if not os.path.exists(full_path):
                 continue
 
             file_id = get_file_id(full_path)
             file_name = os.path.basename(full_path)
-            parts = (
-                full_path.replace(VOLUMES_DIR, "").strip("/").split("/")
-            )
+            parts = full_path.replace(VOLUMES_DIR, "").strip("/").split("/")
             if not parts:
                 continue
 
             drive_name = parts[0]
             rel_dir = (
-                os.path.dirname(full_path)
-                .split(drive_name, 1)[-1]
-                .replace("\\", "/")
+                os.path.dirname(full_path).split(drive_name, 1)[-1].replace("\\", "/")
             )
             subfolder = (
-                rel_dir
-                if not rel_dir or rel_dir.startswith("/")
-                else "/" + rel_dir
+                rel_dir if not rel_dir or rel_dir.startswith("/") else "/" + rel_dir
             )
 
             try:
                 file_size = os.path.getsize(full_path)
-            except Exception:
+            except OSError:
                 file_size = 0
 
-            item_data = {
+            raw_item = {
                 "id": file_id,
+                "fileId": file_id,
                 "name": os.path.splitext(file_name)[0],
+                "title": os.path.splitext(file_name)[0],
                 "drive": drive_name,
+                "directory": subfolder,
                 "subfolder": subfolder,
+                "fullPath": full_path,
                 "path": full_path,
                 "size": file_size,
             }
-            add_media_metadata(item_data, full_path)
-            new_list.append(item_data)
-            new_map[file_id] = item_data
+            add_media_metadata(raw_item, full_path)
+
+            model_dict = create_video_model(raw_item).model_dump()
+            new_list.append(model_dict)
+            new_map[file_id] = model_dict
 
         if new_list:
             return new_list, new_map
-    except Exception:
-        pass
+    except (subprocess.SubprocessError, OSError, ValueError) as ex:
+        log(f"<!> Spotlight scan exception: {type(ex).__name__}: {ex}")
     return None, None
 
 
@@ -202,9 +211,7 @@ def safe_scan_directory(
                     if ext not in ALLOWED_EXTENSIONS:
                         continue
                     file_id = get_file_id(full_path)
-                    rel_path = current_dir[len(volume_path) :].replace(
-                        "\\", "/"
-                    )
+                    rel_path = current_dir[len(volume_path) :].replace("\\", "/")
                     subfolder = (
                         rel_path
                         if not rel_path or rel_path.startswith("/")
@@ -212,25 +219,29 @@ def safe_scan_directory(
                     )
 
                     try:
-                        file_size = entry.stat(
-                            follow_symlinks=False
-                        ).st_size
-                    except Exception:
+                        file_size = entry.stat(follow_symlinks=False).st_size
+                    except OSError:
                         file_size = 0
 
-                    item_data = {
+                    raw_item = {
                         "id": file_id,
+                        "fileId": file_id,
                         "name": os.path.splitext(entry.name)[0],
+                        "title": os.path.splitext(entry.name)[0],
                         "drive": drive_name,
+                        "directory": subfolder,
                         "subfolder": subfolder,
+                        "fullPath": full_path,
                         "path": full_path,
                         "size": file_size,
                     }
-                    add_media_metadata(item_data, full_path)
-                    results_list.append(item_data)
-                    results_map[file_id] = item_data
-    except (PermissionError, OSError):
-        pass
+                    add_media_metadata(raw_item, full_path)
+
+                    model_dict = create_video_model(raw_item).model_dump()
+                    results_list.append(model_dict)
+                    results_map[file_id] = model_dict
+    except (PermissionError, OSError) as ex:
+        log(f"<!> Directory scan access warning for {current_dir}: {ex}")
 
 
 def run_catalog_scan():
@@ -247,10 +258,7 @@ def run_catalog_scan():
             if os.path.exists(VOLUMES_DIR):
                 try:
                     for vol_name in os.listdir(VOLUMES_DIR):
-                        if (
-                            vol_name.startswith(".")
-                            or vol_name == "Macintosh HD"
-                        ):
+                        if vol_name.startswith(".") or vol_name == "Macintosh HD":
                             continue
                         vol_path = os.path.join(VOLUMES_DIR, vol_name)
                         if os.path.isdir(vol_path):
@@ -261,10 +269,8 @@ def run_catalog_scan():
                                 new_list,
                                 new_map,
                             )
-                except Exception as ex:
-                    log(
-                        f"<!> Error reading /Volumes: {type(ex).__name__}: {ex}"
-                    )
+                except OSError as ex:
+                    log(f"<!> Error reading /Volumes: {type(ex).__name__}: {ex}")
 
         with CACHE_LOCK:
             config.FILES_LIST = new_list
@@ -285,5 +291,5 @@ def background_timer_loop():
         time.sleep(REFRESH_INTERVAL_SECONDS)
         try:
             run_catalog_scan()
-        except Exception as ex:
+        except (OSError, RuntimeError, ValueError) as ex:
             log(f"<!> Background catalog scan error: {type(ex).__name__}: {ex}")

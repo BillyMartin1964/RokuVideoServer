@@ -25,9 +25,7 @@ def find_ffmpeg():
 def find_ffprobe():
     candidates = []
     if FFMPEG_PATH:
-        candidates.append(
-            os.path.join(os.path.dirname(FFMPEG_PATH), "ffprobe")
-        )
+        candidates.append(os.path.join(os.path.dirname(FFMPEG_PATH), "ffprobe"))
     candidates.extend(
         [
             "/opt/homebrew/bin/ffprobe",
@@ -48,19 +46,17 @@ def test_ffmpeg(ffmpeg_path):
     try:
         result = subprocess.run(
             [ffmpeg_path, "-version"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
         if result.returncode == 0:
-            first_line = (
-                result.stdout.splitlines()[0] if result.stdout else "ffmpeg"
-            )
+            first_line = result.stdout.splitlines()[0] if result.stdout else "ffmpeg"
             log(f"--> ffmpeg test successful: {first_line}")
             return True
         log(f"<!> ffmpeg exists but returned exit code {result.returncode}")
-    except Exception as ex:
+    except (subprocess.SubprocessError, OSError, ValueError) as ex:
         log(f"<!> ffmpeg executable test failed: {type(ex).__name__}: {ex}")
     return False
 
@@ -71,19 +67,17 @@ def test_ffprobe(ffprobe_path):
     try:
         result = subprocess.run(
             [ffprobe_path, "-version"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
         if result.returncode == 0:
-            first_line = (
-                result.stdout.splitlines()[0] if result.stdout else "ffprobe"
-            )
+            first_line = result.stdout.splitlines()[0] if result.stdout else "ffprobe"
             log(f"--> ffprobe test successful: {first_line}")
             return True
         log(f"<!> ffprobe exists but returned exit code {result.returncode}")
-    except Exception as ex:
+    except (subprocess.SubprocessError, OSError, ValueError) as ex:
         log(f"<!> ffprobe executable test failed: {type(ex).__name__}: {ex}")
     return False
 
@@ -134,10 +128,10 @@ def probe_video_metadata(file_path):
         ]
         result = subprocess.run(
             command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=FFPROBE_TIMEOUT_SECONDS,
+            check=False,
         )
         if result.returncode != 0 or not result.stdout:
             return metadata
@@ -150,19 +144,19 @@ def probe_video_metadata(file_path):
             if stream.get("width") is not None:
                 try:
                     metadata["width"] = int(stream["width"])
-                except Exception:
+                except (ValueError, TypeError):
                     pass
             if stream.get("height") is not None:
                 try:
                     metadata["height"] = int(stream["height"])
-                except Exception:
+                except (ValueError, TypeError):
                     pass
             if stream.get("codec_name"):
                 metadata["codec"] = stream["codec_name"]
             if stream.get("bit_rate"):
                 try:
                     metadata["bitrate"] = int(stream["bit_rate"])
-                except Exception:
+                except (ValueError, TypeError):
                     pass
             if stream.get("r_frame_rate"):
                 frame_rate = stream["r_frame_rate"]
@@ -170,15 +164,13 @@ def probe_video_metadata(file_path):
                     try:
                         num, den = frame_rate.split("/", 1)
                         if float(den) != 0:
-                            metadata["frameRate"] = round(
-                                float(num) / float(den), 3
-                            )
-                    except Exception:
+                            metadata["frameRate"] = round(float(num) / float(den), 3)
+                    except (ValueError, ZeroDivisionError):
                         pass
                 else:
                     try:
                         metadata["frameRate"] = float(frame_rate)
-                    except Exception:
+                    except ValueError:
                         pass
             if stream.get("pix_fmt"):
                 metadata["pixelFormat"] = stream["pix_fmt"]
@@ -187,24 +179,24 @@ def probe_video_metadata(file_path):
             if stream.get("level") is not None:
                 try:
                     metadata["level"] = int(stream["level"])
-                except Exception:
+                except (ValueError, TypeError):
                     pass
 
         format_info = probe_json.get("format", {})
         if format_info.get("duration"):
             try:
                 metadata["duration"] = float(format_info["duration"])
-            except Exception:
+            except ValueError:
                 pass
         if "bitrate" not in metadata and format_info.get("bit_rate"):
             try:
                 metadata["bitrate"] = int(format_info["bit_rate"])
-            except Exception:
+            except (ValueError, TypeError):
                 pass
 
     except subprocess.TimeoutExpired:
         log(f"<!> ffprobe timed out for: {os.path.basename(file_path)}")
-    except Exception:
-        pass
+    except (json.JSONDecodeError, OSError) as ex:
+        log(f"<!> ffprobe metadata extraction error: {type(ex).__name__}: {ex}")
 
     return metadata

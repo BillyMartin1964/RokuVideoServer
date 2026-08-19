@@ -12,11 +12,12 @@ from pydantic import BaseModel, Field
 
 import api.directories as api_directories
 import api.drives as api_drives
+import api.health as api_health
 import api.thumbnails as api_thumbnails
 import api.videos as api_videos
 import config
 from config import CACHE_LOCK, PORT, log, log_separator
-from services import ffmpeg_service, thumbnail_service, video_service
+from services import ffmpeg_service, thumbnail_service, video_service, watcher_service
 
 
 def get_local_ip():
@@ -27,15 +28,17 @@ def get_local_ip():
         sock.close()
         if ip:
             return ip
-    except Exception:
-        pass
+    except OSError as e:
+        log(f"<!> Could not determine local IP via socket: {e}")
+
     try:
         hostname = socket.gethostname()
         ip = socket.gethostbyname(hostname)
         if ip and not ip.startswith("127."):
             return ip
-    except Exception:
-        pass
+    except OSError as e:
+        log(f"<!> Could not determine local IP via hostname: {e}")
+
     return "127.0.0.1"
 
 
@@ -85,6 +88,9 @@ async def lifespan(app: FastAPI):
     )
     timer_thread.start()
 
+    # Start the real-time file system watcher
+    watcher_observer = watcher_service.start_file_watcher()
+
     local_ip = get_local_ip()
     log_separator()
     log("Roku Media Hub Server running on:")
@@ -96,6 +102,11 @@ async def lifespan(app: FastAPI):
     log_separator()
 
     yield
+
+    # Gracefully stop the watcher if the server shuts down
+    if watcher_observer:
+        watcher_observer.stop()
+        watcher_observer.join()
 
 
 # Initialize FastAPI with modern lifespan context
@@ -124,7 +135,7 @@ app.add_middleware(
 @app.get("/api/health", tags=["Health"])
 def get_health(request: Request):
     """Health check endpoint."""
-    return api_videos.handle_get_health(request)
+    return api_health.handle_get_health(request)
 
 
 @app.get("/api/drives", tags=["Drives"])

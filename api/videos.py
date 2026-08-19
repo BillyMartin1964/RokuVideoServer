@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 import config
 from config import CACHE_LOCK, CHUNK_SIZE, log
+from models.video_model import create_video_model
 from services.video_service import get_file_id, save_disk_cache
 
 
@@ -26,6 +27,8 @@ def handle_get_files(request, query_params, start_time):
 
     offset = max(0, offset)
 
+    base_url = str(request.base_url).rstrip("/") if hasattr(request, "base_url") else ""
+
     with CACHE_LOCK:
         total_count = len(config.FILES_LIST)
 
@@ -36,25 +39,34 @@ def handle_get_files(request, query_params, start_time):
                 if drive_filter:
                     ok = ok and (item.get("drive", "") == drive_filter)
                 if subfolder_filter:
-                    ok = ok and (item.get("subfolder", "") == subfolder_filter)
+                    ok = ok and (
+                        item.get("subfolder", "") == subfolder_filter
+                        or item.get("directory", "") == subfolder_filter
+                    )
                 if ok:
                     matching.append(item)
 
             total_count = len(matching)
-            chunk = (
+            raw_chunk = (
                 matching[offset:]
                 if limit == 0
                 else matching[offset : offset + min(limit, 500)]
             )
         else:
             if limit == 0:
-                chunk = config.FILES_LIST[offset:]
+                raw_chunk = config.FILES_LIST[offset:]
             else:
                 limit = max(1, min(limit, 500))
-                chunk = config.FILES_LIST[offset : offset + limit]
+                raw_chunk = config.FILES_LIST[offset : offset + limit]
 
-        has_more = offset + len(chunk) < total_count
-        next_offset = offset + len(chunk)
+        # Standardize every item in the chunk against VideoModel contract
+        formatted_chunk = [
+            create_video_model(item, base_url=base_url).model_dump()
+            for item in raw_chunk
+        ]
+
+        has_more = offset + len(formatted_chunk) < total_count
+        next_offset = offset + len(formatted_chunk)
 
     elapsed = round((time.time() - start_time) * 1000, 2)
     log(
@@ -69,7 +81,7 @@ def handle_get_files(request, query_params, start_time):
             "limit": limit,
             "hasMore": has_more,
             "nextOffset": next_offset,
-            "data": chunk,
+            "data": formatted_chunk,
         }
     )
 
@@ -81,10 +93,14 @@ def handle_move_file(request, body):
     with CACHE_LOCK:
         item = config.FILE_MAP.get(file_id)
 
-    if not item or not item.get("path") or not os.path.exists(item["path"]):
+    if (
+        not item
+        or (not item.get("path") and not item.get("fullPath"))
+        or not os.path.exists(item.get("path") or item.get("fullPath", ""))
+    ):
         raise HTTPException(status_code=400, detail="Invalid File ID or file missing")
 
-    src_path = item["path"]
+    src_path = item.get("path") or item.get("fullPath")
     parent_dir = os.path.dirname(src_path)
     dest_dir = os.path.join(parent_dir, target_folder)
     os.makedirs(dest_dir, exist_ok=True)
@@ -92,19 +108,26 @@ def handle_move_file(request, body):
 
     shutil.move(src_path, dest_path)
 
+    base_url = str(request.base_url).rstrip("/") if hasattr(request, "base_url") else ""
     new_id = get_file_id(dest_path)
-    item["id"] = new_id
-    item["path"] = dest_path
 
     old_sub = item.get("subfolder", "").rstrip("/")
-    item["subfolder"] = f"{old_sub}/{target_folder}" if old_sub else f"/{target_folder}"
+    new_sub = f"{old_sub}/{target_folder}" if old_sub else f"/{target_folder}"
+
+    item["id"] = new_id
+    item["path"] = dest_path
+    item["fullPath"] = dest_path
+    item["subfolder"] = new_sub
+    item["directory"] = dest_dir
+
+    updated_model = create_video_model(item, base_url=base_url).model_dump()
 
     with CACHE_LOCK:
         config.FILE_MAP.pop(file_id, None)
-        config.FILE_MAP[new_id] = item
+        config.FILE_MAP[new_id] = updated_model
         for idx, cat_item in enumerate(config.FILES_LIST):
             if cat_item.get("id") == file_id:
-                config.FILES_LIST[idx] = item
+                config.FILES_LIST[idx] = updated_model
                 break
 
     save_disk_cache()
@@ -120,10 +143,10 @@ def handle_rename_file(request, body):
     with CACHE_LOCK:
         item = config.FILE_MAP.get(file_id)
 
-    if not item or not new_name or not os.path.exists(item.get("path", "")):
+    src_path = item.get("path") or item.get("fullPath", "") if item else ""
+    if not item or not new_name or not os.path.exists(src_path):
         raise HTTPException(status_code=400, detail="Invalid Parameters")
 
-    src_path = item["path"]
     ext = os.path.splitext(src_path)[1]
     dest_path = os.path.join(os.path.dirname(src_path), new_name + ext)
 
@@ -133,17 +156,24 @@ def handle_rename_file(request, body):
         )
 
     os.rename(src_path, dest_path)
+
+    base_url = str(request.base_url).rstrip("/") if hasattr(request, "base_url") else ""
     new_id = get_file_id(dest_path)
+
     item["id"] = new_id
     item["name"] = new_name
+    item["title"] = new_name
     item["path"] = dest_path
+    item["fullPath"] = dest_path
+
+    updated_model = create_video_model(item, base_url=base_url).model_dump()
 
     with CACHE_LOCK:
         config.FILE_MAP.pop(file_id, None)
-        config.FILE_MAP[new_id] = item
+        config.FILE_MAP[new_id] = updated_model
         for idx, cat_item in enumerate(config.FILES_LIST):
             if cat_item.get("id") == file_id:
-                config.FILES_LIST[idx] = item
+                config.FILES_LIST[idx] = updated_model
                 break
 
     save_disk_cache()
@@ -161,7 +191,7 @@ def handle_delete_file(request, file_id):
         item = config.FILE_MAP.get(file_id)
 
     if item:
-        src_path = item.get("path")
+        src_path = item.get("path") or item.get("fullPath")
         if src_path and os.path.exists(src_path):
             try:
                 os.remove(src_path)
@@ -304,29 +334,4 @@ def stream_video_file(request, file_path, send_body=True):
         status_code=200,
         headers={"Accept-Ranges": "bytes", "Content-Length": str(file_size)},
         media_type="video/mp4",
-    )
-
-
-def handle_get_health(request):
-    with CACHE_LOCK:
-        total_videos = len(config.FILES_LIST)
-
-    ffmpeg_path = getattr(config, "FFMPEG_PATH", None)
-    ffprobe_path = getattr(config, "FFPROBE_PATH", None)
-
-    return JSONResponse(
-        {
-            "success": True,
-            "server": "Roku Media Hub",
-            "ffmpegFound": ffmpeg_path is not None,
-            "ffmpegPath": ffmpeg_path,
-            "ffprobeFound": ffprobe_path is not None,
-            "ffprobePath": ffprobe_path,
-            "thumbnailDirectory": config.THUMB_CACHE_DIR,
-            "videoCount": total_videos,
-            "uptimeSeconds": round(
-                time.time() - config.SERVER_START_TIME,
-                1,
-            ),
-        }
     )
