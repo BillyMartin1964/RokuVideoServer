@@ -1,25 +1,20 @@
 #!/usr/bin/env python3
 
-import json
 import os
 import socket
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from socketserver import ThreadingMixIn
-from urllib.parse import parse_qs, unquote, urlparse
+
+from fastapi import FastAPI, HTTPException, Query, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
 import api.directories as api_directories
 import api.drives as api_drives
 import api.thumbnails as api_thumbnails
 import api.videos as api_videos
 import config
-from config import (
-    CACHE_LOCK,
-    PORT,
-    log,
-    log_separator,
-)
+from config import CACHE_LOCK, PORT, log, log_separator
 from services import ffmpeg_service, thumbnail_service, video_service
 
 
@@ -43,174 +38,46 @@ def get_local_ip():
     return "127.0.0.1"
 
 
-class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
-    daemon_threads = True
+# Initialize FastAPI with Swagger UI enabled
+app = FastAPI(
+    title="Roku Media Hub API",
+    description="FastAPI server providing media indexing, thumbnails, and video streaming for Roku.",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+# Global CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-class RequestHandler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
-    def log_message(self, format, *args):
-        return
-
-    def send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-
-    def send_json_response(self, data, status=200):
-        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_cors_headers()
-        self.send_header("Connection", "keep-alive")
-        self.end_headers()
-        try:
-            self.wfile.write(body)
-        except BrokenPipeError:
-            pass
-
-    def send_file_headers(
-        self,
-        file_path,
-        file_size,
-        status=200,
-        content_length=None,
-        content_range=None,
-    ):
-        content_type = video_service.get_video_format_info(file_path)["contentType"]
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header(
-            "Content-Length",
-            str(content_length if content_length is not None else file_size),
-        )
-        self.send_header("Accept-Ranges", "bytes")
-
-        if content_range:
-            self.send_header("Content-Range", content_range)
-
-        try:
-            modified_time = os.path.getmtime(file_path)
-            modified_string = time.strftime(
-                "%a, %d %b %Y %H:%M:%S GMT", time.gmtime(modified_time)
-            )
-            self.send_header("Last-Modified", modified_string)
-        except Exception:
-            pass
-
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
-        self.send_cors_headers()
-        self.end_headers()
-
-    def do_HEAD(self):
-        url_path = unquote(urlparse(self.path).path)
-        if url_path.startswith("/api/files/"):
-            file_id = url_path.replace("/api/files/", "", 1).strip()
-            with CACHE_LOCK:
-                item = config.FILE_MAP.get(file_id)
-                file_path = item.get("path") if item else None
-
-            if not item or not file_path or not os.path.exists(file_path):
-                self.send_error(404, "File Not Found")
-                return
-
-            api_videos.stream_video_file(self, file_path, send_body=False)
-            return
-
-        self.send_error(404, "Endpoint Not Found")
-
-    def do_GET(self):
-        start_time = time.time()
-        parsed_url = urlparse(self.path)
-        url_path = unquote(parsed_url.path)
-        query_params = parse_qs(parsed_url.query)
-
-        if url_path == "/api/health":
-            api_videos.handle_get_health(self)
-            return
-
-        # Fetch USB Drives metadata
-        if url_path == "/api/drives":
-            api_drives.handle_get_drives(self)
-            return
-
-        # Fetch directories (handles all directories OR drive-filtered queries)
-        if url_path == "/api/directories":
-            drive_filter = query_params.get("drive", [None])[0]
-            if drive_filter:
-                api_directories.handle_get_directories_by_drive(self, drive_filter)
-            else:
-                api_directories.handle_get_all_directories(self)
-            return
-
-        # Explicit drive route: /api/directories/drive/<drive_name>
-        if url_path.startswith("/api/directories/drive/"):
-            drive_name = url_path.replace("/api/directories/drive/", "", 1).strip()
-            api_directories.handle_get_directories_by_drive(self, drive_name)
-            return
-
-        if url_path.startswith("/api/files") and not url_path.startswith("/api/files/"):
-            api_videos.handle_get_files(self, query_params, start_time)
-            return
-
-        if url_path.startswith("/api/thumbnails/"):
-            file_id = url_path.replace("/api/thumbnails/", "", 1).strip()
-            api_thumbnails.handle_get_thumbnail(self, file_id)
-            return
-
-        if url_path.startswith("/api/files/"):
-            file_id = url_path.replace("/api/files/", "", 1).strip()
-            with CACHE_LOCK:
-                item = config.FILE_MAP.get(file_id)
-                file_path = item.get("path") if item else None
-
-            if not item or not file_path or not os.path.exists(file_path):
-                self.send_error(404, "File Not Found")
-                return
-
-            api_videos.stream_video_file(self, file_path, send_body=True)
-            return
-
-        self.send_error(404, "Endpoint Not Found")
-
-    def do_POST(self):
-        url_path = unquote(self.path)
-        try:
-            content_length = int(self.headers.get("Content-Length", 0))
-        except ValueError:
-            content_length = 0
-
-        post_data = self.rfile.read(content_length) if content_length > 0 else b""
-        try:
-            body = json.loads(post_data.decode("utf-8")) if post_data else {}
-        except Exception:
-            body = {}
-
-        if url_path == "/api/files/move":
-            api_videos.handle_move_file(self, body)
-            return
-
-        if url_path == "/api/files/rename":
-            api_videos.handle_rename_file(self, body)
-            return
-
-        self.send_error(404, "Endpoint Not Found")
-
-    def do_DELETE(self):
-        url_path = unquote(self.path)
-        if url_path.startswith("/api/files/"):
-            file_id = url_path.replace("/api/files/", "", 1).strip()
-            api_videos.handle_delete_file(self, file_id)
-            return
-
-        self.send_error(404, "Endpoint Not Found")
+# Pydantic Schemas for Swagger Documentation
+class MoveFileRequest(BaseModel):
+    file_id: str = Field(..., example="vid_001", description="ID of the file to move")
+    target_directory: str = Field(
+        ..., example="/media/USB1/Movies", description="Destination directory path"
+    )
 
 
-def run_server():
+class RenameFileRequest(BaseModel):
+    file_id: str = Field(..., example="vid_001", description="ID of the file to rename")
+    new_name: str = Field(
+        ..., example="NewMovieName.mp4", description="New filename with extension"
+    )
+
+
+# Background Services Lifecycle Initializer
+@app.on_event("startup")
+def startup_event():
     log_separator()
-    log("ROKU MEDIA HUB SERVER")
-    log("Starting server...")
+    log("ROKU MEDIA HUB SERVER (FastAPI)")
+    log("Starting services...")
     log_separator()
 
     ffmpeg_service.initialize_ffmpeg()
@@ -224,26 +91,98 @@ def run_server():
     )
     timer_thread.start()
 
-    server_address = ("", PORT)
-    httpd = ThreadedHTTPServer(server_address, RequestHandler)
     local_ip = get_local_ip()
-
     log_separator()
     log("Roku Media Hub Server running on:")
     log(f"    http://{local_ip}:{PORT}")
     log(f"    http://127.0.0.1:{PORT}")
     log("")
-    log("Health check:")
-    log(f"    http://{local_ip}:{PORT}/api/health")
+    log("Interactive API Documentation (Swagger):")
+    log(f"    http://{local_ip}:{PORT}/docs")
     log_separator()
 
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        log("\nShutting down server...")
-        httpd.server_close()
-        log("Server stopped.")
+
+# --- API Routes ---
+
+
+@app.get("/api/health", tags=["Health"])
+def get_health(request: Request):
+    """Health check endpoint."""
+    return api_videos.handle_get_health(request)
+
+
+@app.get("/api/drives", tags=["Drives"])
+def get_drives(request: Request):
+    """Fetch USB Drives metadata."""
+    return api_drives.handle_get_drives(request)
+
+
+@app.get("/api/directories", tags=["Directories"])
+def get_directories(
+    request: Request, drive: str | None = Query(None, description="Drive name filter")
+):
+    """Fetch directories (all directories OR filtered by drive)."""
+    if drive:
+        return api_directories.handle_get_directories_by_drive(request, drive)
+    return api_directories.handle_get_all_directories(request)
+
+
+@app.get("/api/directories/drive/{drive_name}", tags=["Directories"])
+def get_directories_by_drive(request: Request, drive_name: str):
+    """Explicit drive directory route."""
+    return api_directories.handle_get_directories_by_drive(request, drive_name)
+
+
+@app.get("/api/files", tags=["Files"])
+def get_files(request: Request):
+    """Fetch catalog video files with pagination/search query parameters."""
+    start_time = time.time()
+    query_params = dict(request.query_params)
+    return api_videos.handle_get_files(request, query_params, start_time)
+
+
+@app.get("/api/thumbnails/{file_id}", tags=["Thumbnails"])
+def get_thumbnail(request: Request, file_id: str):
+    """Serve cached or generated thumbnail image for a video."""
+    return api_thumbnails.handle_get_thumbnail(request, file_id)
+
+
+@app.get("/api/files/{file_id}", tags=["Streaming"])
+@app.head("/api/files/{file_id}", tags=["Streaming"])
+def stream_file(request: Request, file_id: str):
+    """Stream video content or return headers for media range requests."""
+    with CACHE_LOCK:
+        item = config.FILE_MAP.get(file_id)
+        file_path = item.get("path") if item else None
+
+    if not item or not file_path or not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="File Not Found"
+        )
+
+    send_body = request.method != "HEAD"
+    return api_videos.stream_video_file(request, file_path, send_body=send_body)
+
+
+@app.post("/api/files/move", tags=["File Management"])
+def move_file(request: Request, body: MoveFileRequest):
+    """Move a video file to a target directory."""
+    return api_videos.handle_move_file(request, body.dict())
+
+
+@app.post("/api/files/rename", tags=["File Management"])
+def rename_file(request: Request, body: RenameFileRequest):
+    """Rename a video file."""
+    return api_videos.handle_rename_file(request, body.dict())
+
+
+@app.delete("/api/files/{file_id}", tags=["File Management"])
+def delete_file(request: Request, file_id: str):
+    """Delete a video file from storage."""
+    return api_videos.handle_delete_file(request, file_id)
 
 
 if __name__ == "__main__":
-    run_server()
+    import uvicorn
+
+    uvicorn.run("server:app", host="0.0.0.0", port=PORT, reload=False)
