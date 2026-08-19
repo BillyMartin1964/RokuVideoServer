@@ -2,18 +2,18 @@ import os
 import shutil
 import subprocess
 import tempfile
-import time
-import services.ffmpeg_service as ffmpeg_service
+
 from config import (
-    THUMB_CACHE_DIR,
     DEFAULT_POSTER_FILE,
-    THUMB_WIDTH,
+    THUMB_CACHE_DIR,
     THUMB_HEIGHT,
-    THUMBNAIL_TIMEOUT_SECONDS,
+    THUMB_WIDTH,
     THUMBNAIL_SEEK_SECONDS,
+    THUMBNAIL_TIMEOUT_SECONDS,
     log,
     log_separator,
 )
+import services.ffmpeg_service as ffmpeg_service
 from services.video_service import get_file_id
 
 
@@ -54,20 +54,20 @@ def create_default_poster_with_ffmpeg():
             and os.path.exists(DEFAULT_POSTER_FILE)
             and os.path.getsize(DEFAULT_POSTER_FILE) > 0
         )
-    except Exception:
+    except Exception as ex:
+        log(f"<!> FFmpeg default poster creation failed: {type(ex).__name__}: {ex}")
         return False
 
 
 def create_default_poster_with_sips():
     if os.path.exists(DEFAULT_POSTER_FILE):
         return True
+
     temp_ppm = os.path.join(THUMB_CACHE_DIR, "_default_poster_source.ppm")
     try:
         rgb = bytes([48, 52, 59])
         with open(temp_ppm, "wb") as f:
-            f.write(
-                f"P6\n{THUMB_WIDTH} {THUMB_HEIGHT}\n255\n".encode("ascii")
-            )
+            f.write(f"P6\n{THUMB_WIDTH} {THUMB_HEIGHT}\n255\n".encode("ascii"))
             f.write(rgb * (THUMB_WIDTH * THUMB_HEIGHT))
 
         result = subprocess.run(
@@ -90,13 +90,14 @@ def create_default_poster_with_sips():
             and os.path.exists(DEFAULT_POSTER_FILE)
             and os.path.getsize(DEFAULT_POSTER_FILE) > 0
         )
-    except Exception:
+    except Exception as ex:
+        log(f"<!> SIPS default poster creation failed: {type(ex).__name__}: {ex}")
         return False
     finally:
         if os.path.exists(temp_ppm):
             try:
                 os.remove(temp_ppm)
-            except Exception:
+            except OSError:
                 pass
 
 
@@ -106,14 +107,22 @@ def ensure_default_poster():
         and os.path.getsize(DEFAULT_POSTER_FILE) > 0
     ):
         return True
+
     if create_default_poster_with_ffmpeg():
         return True
+
     return create_default_poster_with_sips()
 
 
 def run_ffmpeg_thumbnail(file_path, thumb_path, seek_seconds):
     if not ffmpeg_service.FFMPEG_PATH:
         return False
+
+    pad_filter = (
+        f"scale={THUMB_WIDTH}:{THUMB_HEIGHT}:force_original_aspect_ratio=decrease,"
+        f"pad={THUMB_WIDTH}:{THUMB_HEIGHT}:(ow-iw)/2:(oh-ih)/2"
+    )
+
     cmd = [
         ffmpeg_service.FFMPEG_PATH,
         "-hide_banner",
@@ -126,12 +135,13 @@ def run_ffmpeg_thumbnail(file_path, thumb_path, seek_seconds):
         "-frames:v",
         "1",
         "-vf",
-        f"scale={THUMB_WIDTH}:{THUMB_HEIGHT}:force_original_aspect_ratio=decrease,pad={THUMB_WIDTH}:{THUMB_HEIGHT}:(ow-iw)/2:(oh-ih)/2",
+        pad_filter,
         "-q:v",
         "3",
         "-y",
         thumb_path,
     ]
+
     try:
         result = subprocess.run(
             cmd,
@@ -145,12 +155,16 @@ def run_ffmpeg_thumbnail(file_path, thumb_path, seek_seconds):
             and os.path.exists(thumb_path)
             and os.path.getsize(thumb_path) > 0
         )
-    except Exception:
+    except Exception as ex:
+        log(
+            f"<!> FFmpeg thumbnail extraction failed for {os.path.basename(file_path)}: "
+            f"{type(ex).__name__}: {ex}"
+        )
         return False
 
 
 def run_quicklook_thumbnail(file_path, thumb_path):
-    # Isolated temp folder per process prevents race conditions during multi-threaded batch scanning
+    # Isolated temp directory per thread/process prevents collision during parallel catalog generation
     temp_dir = tempfile.mkdtemp(dir=THUMB_CACHE_DIR)
     try:
         cmd = [
@@ -202,9 +216,13 @@ def run_quicklook_thumbnail(file_path, thumb_path):
                 and os.path.getsize(thumb_path) > 0
             )
     except Exception as ex:
-        log(f"<!> QuickLook failed for {os.path.basename(file_path)}: {ex}")
+        log(
+            f"<!> QuickLook thumbnail failed for {os.path.basename(file_path)}: "
+            f"{type(ex).__name__}: {ex}"
+        )
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
     return False
 
 

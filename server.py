@@ -4,6 +4,7 @@ import os
 import socket
 import threading
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,43 +39,36 @@ def get_local_ip():
     return "127.0.0.1"
 
 
-# Initialize FastAPI with Swagger UI enabled
-app = FastAPI(
-    title="Roku Media Hub API",
-    description="FastAPI server providing media indexing, thumbnails, and video streaming for Roku.",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-)
-
-# Global CORS Configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# Pydantic Schemas for Swagger Documentation
+# Pydantic V2 Compatible Schemas
 class MoveFileRequest(BaseModel):
-    file_id: str = Field(..., example="vid_001", description="ID of the file to move")
+    file_id: str = Field(
+        ...,
+        json_schema_extra={"example": "vid_001"},
+        description="ID of the file to move",
+    )
     target_directory: str = Field(
-        ..., example="/media/USB1/Movies", description="Destination directory path"
+        ...,
+        json_schema_extra={"example": "/media/USB1/Movies"},
+        description="Destination directory path",
     )
 
 
 class RenameFileRequest(BaseModel):
-    file_id: str = Field(..., example="vid_001", description="ID of the file to rename")
+    file_id: str = Field(
+        ...,
+        json_schema_extra={"example": "vid_001"},
+        description="ID of the file to rename",
+    )
     new_name: str = Field(
-        ..., example="NewMovieName.mp4", description="New filename with extension"
+        ...,
+        json_schema_extra={"example": "NewMovieName.mp4"},
+        description="New filename with extension",
     )
 
 
-# Background Services Lifecycle Initializer
-@app.on_event("startup")
-def startup_event():
+# Modern FastAPI Lifespan Handler (replaces @app.on_event)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     log_separator()
     log("ROKU MEDIA HUB SERVER (FastAPI)")
     log("Starting services...")
@@ -101,6 +95,28 @@ def startup_event():
     log(f"    http://{local_ip}:{PORT}/docs")
     log_separator()
 
+    yield
+
+
+# Initialize FastAPI with modern lifespan context
+app = FastAPI(
+    title="Roku Media Hub API",
+    description="FastAPI server providing media indexing, thumbnails, and video streaming for Roku.",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan,
+)
+
+# Global CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # --- API Routes ---
 
@@ -121,7 +137,7 @@ def get_drives(request: Request):
 def get_directories(
     request: Request, drive: str | None = Query(None, description="Drive name filter")
 ):
-    """Fetch directories (all directories OR filtered by drive)."""
+    """Fetch directories (all directories OR filtered by drive). Python 3.9 friendly typing."""
     if drive:
         return api_directories.handle_get_directories_by_drive(request, drive)
     return api_directories.handle_get_all_directories(request)
@@ -167,13 +183,17 @@ def stream_file(request: Request, file_id: str):
 @app.post("/api/files/move", tags=["File Management"])
 def move_file(request: Request, body: MoveFileRequest):
     """Move a video file to a target directory."""
-    return api_videos.handle_move_file(request, body.dict())
+    return api_videos.handle_move_file(
+        request, body.model_dump() if hasattr(body, "model_dump") else body.dict()
+    )
 
 
 @app.post("/api/files/rename", tags=["File Management"])
 def rename_file(request: Request, body: RenameFileRequest):
     """Rename a video file."""
-    return api_videos.handle_rename_file(request, body.dict())
+    return api_videos.handle_rename_file(
+        request, body.model_dump() if hasattr(body, "model_dump") else body.dict()
+    )
 
 
 @app.delete("/api/files/{file_id}", tags=["File Management"])

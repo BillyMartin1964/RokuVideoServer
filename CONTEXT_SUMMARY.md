@@ -1,26 +1,27 @@
 # Project Context: Roku Video Server Refactoring
 
 **Goal:**
-To finalize the refactoring of the monolithic video serving application into a robust, modular, and service-oriented architecture using Python 3. The primary objective is to complete the dependency injection setup within the main server entry point (`server.py`), ensuring all decoupled services are correctly initialized and orchestrated to make the application fully functional and runnable.
+Finalize the refactoring of the monolithic Python 3 video server application into a robust, modular, service-oriented architecture. The main goal is completing the dependency injection setup in the main entry point (`server.py`) so all decoupled services initialize and orchestrate correctly for full runtime stability.
 
 **Architectural Pattern & Core Technologies:**
-*   **Architecture:** Service Layer Pattern with explicit Dependency Injection. All business logic is isolated into specialized service modules, and the main application entry point acts as the Composition Root.
-*   **Core Tech:** Python 3 (Utilizing `http.server` and `socketserver`).
-*   **Environment Notes:** The development is taking place on Windows, although some media utilities (like `mdfind`) are noted as targeting macOS paths, which is a current point of attention.
+* **Architecture:** Service Layer Pattern with explicit Dependency Injection. Business logic is isolated into specialized modules (`services/`), with `server.py` serving as the Composition Root.
+* **Core Tech:** Python 3 (`http.server`, `socketserver`, `threading`, `shutil`).
+* **Cross-Platform Target:** Windows/macOS backend serving media endpoints to Roku client applications (Roku SceneGraph SG nodes).
 
 **Current Status of Modules (Stable & Complete):**
-1.  **`services/config.py`**: Centralized configuration. Stable source for all global constants (e.g., `PORT`, `VOLUMES_DIR`, `THUMB_CACHE_DIR`).
-2.  **`services/video_service.py`**: Handles core media logic, including `send_video_file` (streaming with Range Headers) and metadata retrieval (`ffprobe`). This service is functionally complete.
-3.  **`services/media_catalog_service.py`**: Manages the content catalog. Fully implemented to handle both `mdfind` (Spotlight) and OS directory crawling, with robust persistence via disk caching.
-4.  **`services/request_handler.py`**: Acts as the HTTP router. Its methods (`do_GET`, `do_HEAD`) are correctly structured to accept and utilize service dependencies (e.g., `catalog_service` in `get_catalog_file`), confirming the service interface contract.
+1. **`services/config.py`**: Centralized configuration and global thread locking (`CACHE_LOCK`, `PORT`, `VOLUMES_DIR`, `THUMB_CACHE_DIR`).
+2. **`services/video_service.py`**: Handles media streaming with HTTP Range Request headers and `ffprobe` metadata extraction.
+3. **`services/thumbnail_service.py`**: Handles dynamic thumbnail generation, default poster fallbacks, HEAD request validation, and Roku-friendly HTTP caching headers (`Cache-Control`, `Expires`).
+4. **`services/media_catalog_service.py`**: Manages media catalog indexing (`mdfind` Spotlight / directory crawling), volume traversal safety, path normalization, and disk cache persistence.
+5. **`services/request_handler.py`**: Serves as the HTTP API router and endpoint handler (drives, directory listings, media thumbnails, streaming) with strict connection drop handling (`BrokenPipeError`, `ConnectionResetError`).
 
 **The Critical Next Step (Focus Area):**
-*   **File:** `server.py`
-*   **Task:** Finalize the `run_server()` function. This function must act as the **Composition Root**, responsible for:
-    1.  Correctly instantiating all necessary services (`MediaCatalogService`, `VideoService`, etc.) in the correct initialization order.
-    2.  Building and passing a cohesive `server_context` (or equivalent dependency map) to the `RequestHandler` instance.
-    3.  Starting the `http.server` loop gracefully while ensuring background tasks (like the catalog scanning thread) are initiated and managed correctly.
+* **File:** `server.py`
+* **Task:** Finalize and validate the `run_server()` function acting as the **Composition Root**:
+  1. Instantiating all core services (`MediaCatalogService`, `VideoService`, `ThumbnailService`) in proper dependency order.
+  2. Passing the injected `server_context` / service mapping directly to `RequestHandler` instances.
+  3. Diagnosing and resolving the runtime startup failure (exit code 1) during server startup and background catalog thread initialization.
 
-**Summary of Completion:**
-*   **Completed:** Architecture decomposition, Service implementation, Request routing contract definition. The dependency structure between `server.py` $\rightarrow$ `MediaCatalogService` $\rightarrow$ `VideoService` is architecturally complete and has been implemented.
-*   **Pending:** Runtime validation and debugging of the Composition Root in `server.py`. The latest attempt to run the server failed with an exit code 1, indicating a runtime dependency or initialization error that must be resolved.
+**Summary of Progress:**
+* **Completed:** Full modular decomposition, request handler routing contracts, thread-safe volume/directory reading, path normalization (`/` vs `\`), and robust thumbnail HTTP stream handling.
+* **Pending:** Debugging and runtime validation of `server.py` execution to fix the exit code 1 crash on startup.

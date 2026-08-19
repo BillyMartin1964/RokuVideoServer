@@ -1,84 +1,47 @@
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
 import config
 from config import CACHE_LOCK
 
 
-def handle_get_all_directories(handler):
-    dirs = {}
+def handle_get_all_directories(request: Request):
+    """Returns a list of all unique subfolders across indexed files."""
+    directories = set()
+
     with CACHE_LOCK:
         for item in config.FILES_LIST:
-            drive = item.get("drive", "")
-            sub = item.get("subfolder", "")
-            key = f"{drive}|{sub}"
+            subfolder = item.get("subfolder")
+            if subfolder:
+                directories.add(subfolder)
 
-            if key not in dirs:
-                thumb_id = item.get("id", "")
-                thumb_url = f"/api/thumbnails/{thumb_id}" if thumb_id else ""
-                sub_display = sub.lstrip("/") if isinstance(sub, str) else sub
-
-                if sub_display:
-                    display_name = f"{drive} / {sub_display}"
-                    title_only = sub_display.split("/")[-1]
-                else:
-                    display_name = drive
-                    title_only = drive
-
-                dirs[key] = {
-                    "drive": drive,
-                    "subfolder": sub,
-                    "dirKey": key,
-                    "thumbUrl": thumb_url,
-                    "name": display_name,
-                    "title": title_only,
-                }
-
-    directory_list = list(dirs.values())
-    handler.send_json_response(
-        {"success": True, "total": len(directory_list), "data": directory_list}
+    sorted_dirs = sorted(list(directories))
+    return JSONResponse(
+        content={
+            "success": True,
+            "data": sorted_dirs,
+            "count": len(sorted_dirs),
+        }
     )
 
 
-def handle_get_directories_by_drive(handler, drive_name):
-    dirs = {}
-    target_drive_lower = drive_name.lower().strip()
+def handle_get_directories_by_drive(request: Request, drive_name: str):
+    """Returns a list of unique subfolders for a specific drive volume."""
+    directories = set()
 
     with CACHE_LOCK:
         for item in config.FILES_LIST:
-            drive = item.get("drive", "")
+            if item.get("drive") == drive_name:
+                subfolder = item.get("subfolder")
+                if subfolder:
+                    directories.add(subfolder)
 
-            # Filter out entries that do not match the target drive
-            if drive.lower().strip() != target_drive_lower:
-                continue
-
-            sub = item.get("subfolder", "")
-            key = f"{drive}|{sub}"
-
-            if key not in dirs:
-                thumb_id = item.get("id", "")
-                thumb_url = f"/api/thumbnails/{thumb_id}" if thumb_id else ""
-                sub_display = sub.lstrip("/") if isinstance(sub, str) else sub
-
-                if sub_display:
-                    display_name = f"{drive} / {sub_display}"
-                    title_only = sub_display.split("/")[-1]
-                else:
-                    display_name = drive
-                    title_only = drive
-
-                dirs[key] = {
-                    "drive": drive,
-                    "subfolder": sub,
-                    "dirKey": key,
-                    "thumbUrl": thumb_url,
-                    "name": display_name,
-                    "title": title_only,
-                }
-
-    directory_list = list(dirs.values())
-    handler.send_json_response(
-        {
+    sorted_dirs = sorted(list(directories))
+    return JSONResponse(
+        content={
             "success": True,
             "drive": drive_name,
-            "total": len(directory_list),
-            "data": directory_list,
+            "data": sorted_dirs,
+            "count": len(sorted_dirs),
         }
     )

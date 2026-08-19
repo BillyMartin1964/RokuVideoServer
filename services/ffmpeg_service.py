@@ -1,8 +1,9 @@
+import json
 import os
 import shutil
 import subprocess
-import json
-from config import log, FFPROBE_TIMEOUT_SECONDS
+
+from config import FFPROBE_TIMEOUT_SECONDS, log
 
 FFMPEG_PATH = None
 FFPROBE_PATH = None

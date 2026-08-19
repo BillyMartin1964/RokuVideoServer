@@ -1,16 +1,17 @@
 import os
 import re
+import shutil
 import time
+
+from fastapi import HTTPException
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 import config
 from config import CACHE_LOCK, CHUNK_SIZE, log
-from services.video_service import (
-    get_file_id,
-    save_disk_cache,
-)
+from services.video_service import get_file_id, save_disk_cache
 
 
-def handle_get_files(handler, query_params, start_time):
+def handle_get_files(request, query_params, start_time):
     drive_filter = query_params.get("drive", [None])[0]
     subfolder_filter = query_params.get("subfolder", [None])[0]
 
@@ -18,11 +19,10 @@ def handle_get_files(handler, query_params, start_time):
         offset = int(query_params.get("offset", [0])[0])
         limit = int(query_params.get("limit", [60])[0])
     except ValueError:
-        handler.send_json_response(
+        return JSONResponse(
             {"success": False, "error": "Invalid offset or limit."},
-            status=400,
+            status_code=400,
         )
-        return
 
     offset = max(0, offset)
 
@@ -61,7 +61,7 @@ def handle_get_files(handler, query_params, start_time):
         f"--> Stream Batch: Sent items {offset} to {next_offset} / {total_count} in {elapsed}ms"
     )
 
-    handler.send_json_response(
+    return JSONResponse(
         {
             "success": True,
             "total": total_count,
@@ -74,7 +74,7 @@ def handle_get_files(handler, query_params, start_time):
     )
 
 
-def handle_move_file(handler, body):
+def handle_move_file(request, body):
     file_id = body.get("id")
     target_folder = body.get("targetFolder", "Archive")
 
@@ -82,16 +82,13 @@ def handle_move_file(handler, body):
         item = config.FILE_MAP.get(file_id)
 
     if not item or not item.get("path") or not os.path.exists(item["path"]):
-        handler.send_error(400, "Invalid File ID or file missing")
-        return
+        raise HTTPException(status_code=400, detail="Invalid File ID or file missing")
 
     src_path = item["path"]
     parent_dir = os.path.dirname(src_path)
     dest_dir = os.path.join(parent_dir, target_folder)
     os.makedirs(dest_dir, exist_ok=True)
     dest_path = os.path.join(dest_dir, os.path.basename(src_path))
-
-    import shutil
 
     shutil.move(src_path, dest_path)
 
@@ -111,12 +108,12 @@ def handle_move_file(handler, body):
                 break
 
     save_disk_cache()
-    handler.send_json_response(
+    return JSONResponse(
         {"success": True, "message": "File moved successfully", "newId": new_id}
     )
 
 
-def handle_rename_file(handler, body):
+def handle_rename_file(request, body):
     file_id = body.get("id")
     new_name = (body.get("newName") or "").strip()
 
@@ -124,16 +121,16 @@ def handle_rename_file(handler, body):
         item = config.FILE_MAP.get(file_id)
 
     if not item or not new_name or not os.path.exists(item.get("path", "")):
-        handler.send_error(400, "Invalid Parameters")
-        return
+        raise HTTPException(status_code=400, detail="Invalid Parameters")
 
     src_path = item["path"]
     ext = os.path.splitext(src_path)[1]
     dest_path = os.path.join(os.path.dirname(src_path), new_name + ext)
 
     if os.path.exists(dest_path):
-        handler.send_error(409, "A file with that name already exists")
-        return
+        raise HTTPException(
+            status_code=409, detail="A file with that name already exists"
+        )
 
     os.rename(src_path, dest_path)
     new_id = get_file_id(dest_path)
@@ -150,7 +147,7 @@ def handle_rename_file(handler, body):
                 break
 
     save_disk_cache()
-    handler.send_json_response(
+    return JSONResponse(
         {
             "success": True,
             "message": "File renamed successfully",
@@ -159,7 +156,7 @@ def handle_rename_file(handler, body):
     )
 
 
-def handle_delete_file(handler, file_id):
+def handle_delete_file(request, file_id):
     with CACHE_LOCK:
         item = config.FILE_MAP.get(file_id)
 
@@ -171,160 +168,153 @@ def handle_delete_file(handler, file_id):
             except (PermissionError, FileNotFoundError, OSError) as ex:
                 log(f"<!> Error deleting file: {type(ex).__name__}: {ex}")
                 if isinstance(ex, PermissionError):
-                    handler.send_json_response(
+                    return JSONResponse(
                         {
                             "success": False,
                             "error": "Permission denied when deleting file.",
                         },
-                        status=403,
+                        status_code=403,
                     )
                 elif isinstance(ex, FileNotFoundError):
-                    handler.send_json_response(
+                    return JSONResponse(
                         {
                             "success": False,
                             "error": "File not found when attempting delete.",
                         },
-                        status=404,
+                        status_code=404,
                     )
                 else:
-                    handler.send_json_response(
+                    return JSONResponse(
                         {
                             "success": False,
                             "error": f"Unable to delete file: {type(ex).__name__}: {ex}",
                         },
-                        status=500,
+                        status_code=500,
                     )
-                return
 
         with CACHE_LOCK:
             config.FILE_MAP.pop(file_id, None)
             config.FILES_LIST = [i for i in config.FILES_LIST if i.get("id") != file_id]
 
         save_disk_cache()
-        handler.send_json_response(
-            {"success": True, "message": "File deleted successfully"}
-        )
-        return
+        return JSONResponse({"success": True, "message": "File deleted successfully"})
 
-    handler.send_json_response(
-        {"success": False, "error": "Invalid File ID"}, status=400
-    )
+    return JSONResponse({"success": False, "error": "Invalid File ID"}, status_code=400)
 
 
-def stream_video_file(handler, file_path, send_body=True):
+def stream_video_file(request, file_path, send_body=True):
     if not os.path.exists(file_path):
-        handler.send_error(404, "File Not Found")
-        return
+        raise HTTPException(status_code=404, detail="File Not Found")
 
     try:
         file_size = os.path.getsize(file_path)
     except OSError:
-        handler.send_error(404, "Unable to determine file size")
-        return
+        raise HTTPException(status_code=404, detail="Unable to determine file size")
 
     if file_size <= 0:
-        handler.send_error(404, "Empty File")
-        return
+        raise HTTPException(status_code=404, detail="Empty File")
 
-    range_header = handler.headers.get("Range")
+    range_header = request.headers.get("Range") if hasattr(request, "headers") else None
 
     if range_header:
         match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
         if not match:
-            handler.send_response(416)
-            handler.send_header("Content-Range", f"bytes */{file_size}")
-            handler.send_header("Accept-Ranges", "bytes")
-            handler.send_header("Connection", "keep-alive")
-            handler.end_headers()
-            return
+            return JSONResponse(
+                status_code=416,
+                headers={
+                    "Content-Range": f"bytes */{file_size}",
+                    "Accept-Ranges": "bytes",
+                    "Connection": "keep-alive",
+                },
+                content={"error": "Requested Range Not Satisfiable"},
+            )
 
         start_text, end_text = match.group(1), match.group(2)
 
         if start_text == "" and end_text != "":
             suffix_length = int(end_text)
             if suffix_length <= 0:
-                handler.send_response(416)
-                handler.send_header("Content-Range", f"bytes */{file_size}")
-                handler.end_headers()
-                return
+                return JSONResponse(
+                    status_code=416,
+                    headers={"Content-Range": f"bytes */{file_size}"},
+                    content={"error": "Invalid byte range"},
+                )
             start = max(0, file_size - min(suffix_length, file_size))
             end = file_size - 1
         else:
             if start_text == "":
-                handler.send_response(416)
-                handler.send_header("Content-Range", f"bytes */{file_size}")
-                handler.end_headers()
-                return
+                return JSONResponse(
+                    status_code=416,
+                    headers={"Content-Range": f"bytes */{file_size}"},
+                    content={"error": "Invalid byte range"},
+                )
             start = int(start_text)
             if start >= file_size:
-                handler.send_response(416)
-                handler.send_header("Content-Range", f"bytes */{file_size}")
-                handler.send_header("Accept-Ranges", "bytes")
-                handler.end_headers()
-                return
+                return JSONResponse(
+                    status_code=416,
+                    headers={
+                        "Content-Range": f"bytes */{file_size}",
+                        "Accept-Ranges": "bytes",
+                    },
+                    content={"error": "Range start out of bounds"},
+                )
             end = int(end_text) if end_text else file_size - 1
             end = min(end, file_size - 1)
 
             if end < start:
-                handler.send_response(416)
-                handler.send_header("Content-Range", f"bytes */{file_size}")
-                handler.send_header("Accept-Ranges", "bytes")
-                handler.end_headers()
-                return
+                return JSONResponse(
+                    status_code=416,
+                    headers={
+                        "Content-Range": f"bytes */{file_size}",
+                        "Accept-Ranges": "bytes",
+                    },
+                    content={"error": "Range end less than start"},
+                )
 
         length = end - start + 1
         content_range = f"bytes {start}-{end}/{file_size}"
-        handler.send_file_headers(
-            file_path,
-            file_size,
-            status=206,
-            content_length=length,
-            content_range=content_range,
+
+        def iter_file_range():
+            try:
+                with open(file_path, "rb") as f:
+                    f.seek(start)
+                    bytes_remaining = length
+                    while bytes_remaining > 0:
+                        chunk = f.read(min(CHUNK_SIZE, bytes_remaining))
+                        if not chunk:
+                            break
+                        bytes_remaining -= len(chunk)
+                        yield chunk
+            except BrokenPipeError:
+                log(f"--> Video client disconnected during range {start}-{end}.")
+
+        return StreamingResponse(
+            iter_file_range() if send_body else iter([]),
+            status_code=206,
+            headers={
+                "Content-Range": content_range,
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(length),
+                "Content-Type": "video/mp4",
+            },
         )
 
-        if not send_body:
-            return
-
-        try:
-            with open(file_path, "rb") as f:
-                f.seek(start)
-                bytes_remaining = length
-                while bytes_remaining > 0:
-                    chunk = f.read(min(CHUNK_SIZE, bytes_remaining))
-                    if not chunk:
-                        break
-                    handler.wfile.write(chunk)
-                    bytes_remaining -= len(chunk)
-        except BrokenPipeError:
-            log(f"--> Video client disconnected during range {start}-{end}.")
-        return
-
-    handler.send_file_headers(
-        file_path, file_size, status=200, content_length=file_size
+    return FileResponse(
+        file_path,
+        status_code=200,
+        headers={"Accept-Ranges": "bytes", "Content-Length": str(file_size)},
+        media_type="video/mp4",
     )
 
-    if not send_body:
-        return
 
-    try:
-        with open(file_path, "rb") as f:
-            while True:
-                chunk = f.read(CHUNK_SIZE)
-                if not chunk:
-                    break
-                handler.wfile.write(chunk)
-    except BrokenPipeError:
-        log("--> Video client disconnected.")
-
-
-def handle_get_health(handler):
+def handle_get_health(request):
     with CACHE_LOCK:
         total_videos = len(config.FILES_LIST)
 
     ffmpeg_path = getattr(config, "FFMPEG_PATH", None)
     ffprobe_path = getattr(config, "FFPROBE_PATH", None)
 
-    handler.send_json_response(
+    return JSONResponse(
         {
             "success": True,
             "server": "Roku Media Hub",
