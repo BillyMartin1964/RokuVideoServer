@@ -13,7 +13,7 @@ from config import (
     log,
     log_separator,
 )
-import services.ffmpeg_service as ffmpeg_service
+from services import ffmpeg_service
 from services.video_service import get_file_id
 
 
@@ -102,10 +102,7 @@ def create_default_poster_with_sips():
 
 
 def ensure_default_poster():
-    if (
-        os.path.exists(DEFAULT_POSTER_FILE)
-        and os.path.getsize(DEFAULT_POSTER_FILE) > 0
-    ):
+    if os.path.exists(DEFAULT_POSTER_FILE) and os.path.getsize(DEFAULT_POSTER_FILE) > 0:
         return True
 
     if create_default_poster_with_ffmpeg():
@@ -184,17 +181,12 @@ def run_quicklook_thumbnail(file_path, thumb_path):
             timeout=THUMBNAIL_TIMEOUT_SECONDS,
         )
 
-        generated_pngs = [
-            f for f in os.listdir(temp_dir) if f.lower().endswith(".png")
-        ]
+        generated_pngs = [f for f in os.listdir(temp_dir) if f.lower().endswith(".png")]
         if not generated_pngs:
             return False
 
         source_thumbnail = os.path.join(temp_dir, generated_pngs[0])
-        if (
-            os.path.exists(source_thumbnail)
-            and os.path.getsize(source_thumbnail) > 0
-        ):
+        if os.path.exists(source_thumbnail) and os.path.getsize(source_thumbnail) > 0:
             convert_result = subprocess.run(
                 [
                     "/usr/bin/sips",
@@ -235,9 +227,7 @@ def generate_thumbnail(file_path):
     log(f"THUMBNAIL REQUEST: {os.path.basename(file_path)}")
 
     if ffmpeg_service.FFMPEG_PATH:
-        if run_ffmpeg_thumbnail(
-            file_path, thumb_path, THUMBNAIL_SEEK_SECONDS
-        ):
+        if run_ffmpeg_thumbnail(file_path, thumb_path, THUMBNAIL_SEEK_SECONDS):
             return thumb_path
         if run_ffmpeg_thumbnail(file_path, thumb_path, 0):
             return thumb_path

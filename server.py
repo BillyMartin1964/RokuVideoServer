@@ -18,7 +18,7 @@ import config
 from config import CACHE_LOCK, PORT, log, log_separator
 from services import (
     ffmpeg_service,
-    thumbnail_service,
+    video_model_service,
     video_service,
     watcher_service,
 )
@@ -94,7 +94,7 @@ async def lifespan(app: FastAPI):
     log_separator()
 
     ffmpeg_service.initialize_ffmpeg()
-    thumbnail_service.ensure_default_poster()
+    video_model_service.ensure_default_poster()
     video_service.load_disk_cache()
 
     timer_thread = threading.Thread(

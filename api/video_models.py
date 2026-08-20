@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import config
 from config import CACHE_LOCK, log
 from models.video_model import create_video_model
-from services.thumbnail_service import generate_thumbnail
+from services.video_model_service import generate_thumbnail
 from services.video_service import get_file_id, save_disk_cache
 
 
