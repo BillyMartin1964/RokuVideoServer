@@ -1,0 +1,432 @@
+
+========================================================================
+[13:43:53] ROKU MEDIA HUB SERVER (FastAPI)
+[13:43:53] Starting services...
+
+========================================================================
+[13:43:53] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[13:43:53] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[13:43:53] --> ffmpeg is ready for thumbnail generation.
+[13:43:53] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[13:43:53] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[13:43:53] --> ffprobe is ready for media metadata.
+[13:43:53] --> Loaded 6008 indexed videos from SSD cache.
+[13:43:53] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[13:43:53] Roku Media Hub Server running on:
+[13:43:53]     http://192.168.0.230:8001
+[13:43:53]     http://127.0.0.1:8001
+[13:43:53] 
+[13:43:53] Interactive API Documentation (Swagger):
+[13:43:53]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[13:44:02] ROKU MEDIA HUB SERVER (FastAPI)
+[13:44:02] Starting services...
+
+========================================================================
+[13:44:02] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[13:44:02] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[13:44:02] --> ffmpeg is ready for thumbnail generation.
+[13:44:02] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[13:44:02] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[13:44:02] --> ffprobe is ready for media metadata.
+[13:44:02] --> Loaded 6008 indexed videos from SSD cache.
+[13:44:02] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[13:44:02] Roku Media Hub Server running on:
+[13:44:02]     http://192.168.0.230:8001
+[13:44:02]     http://127.0.0.1:8001
+[13:44:02] 
+[13:44:02] Interactive API Documentation (Swagger):
+[13:44:02]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[13:44:19] ROKU MEDIA HUB SERVER (FastAPI)
+[13:44:19] Starting services...
+
+========================================================================
+[13:44:19] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[13:44:19] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[13:44:19] --> ffmpeg is ready for thumbnail generation.
+[13:44:19] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[13:44:19] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[13:44:19] --> ffprobe is ready for media metadata.
+[13:44:19] --> Loaded 6008 indexed videos from SSD cache.
+[13:44:19] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[13:44:19] Roku Media Hub Server running on:
+[13:44:19]     http://192.168.0.230:8001
+[13:44:19]     http://127.0.0.1:8001
+[13:44:19] 
+[13:44:19] Interactive API Documentation (Swagger):
+[13:44:19]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[13:45:37] ROKU MEDIA HUB SERVER (FastAPI)
+[13:45:37] Starting services...
+
+========================================================================
+[13:45:37] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[13:45:37] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[13:45:37] --> ffmpeg is ready for thumbnail generation.
+[13:45:37] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[13:45:37] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[13:45:37] --> ffprobe is ready for media metadata.
+[13:45:37] --> Loaded 6008 indexed videos from SSD cache.
+[13:45:37] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[13:45:37] Roku Media Hub Server running on:
+[13:45:37]     http://192.168.0.230:8001
+[13:45:37]     http://127.0.0.1:8001
+[13:45:37] 
+[13:45:37] Interactive API Documentation (Swagger):
+[13:45:37]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[13:45:51] ROKU MEDIA HUB SERVER (FastAPI)
+[13:45:51] Starting services...
+
+========================================================================
+[13:45:51] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[13:45:51] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[13:45:51] --> ffmpeg is ready for thumbnail generation.
+[13:45:51] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[13:45:51] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[13:45:51] --> ffprobe is ready for media metadata.
+[13:45:51] --> Loaded 6008 indexed videos from SSD cache.
+[13:45:51] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[13:45:51] Roku Media Hub Server running on:
+[13:45:51]     http://192.168.0.230:8001
+[13:45:51]     http://127.0.0.1:8001
+[13:45:51] 
+[13:45:51] Interactive API Documentation (Swagger):
+[13:45:51]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[13:48:58] ROKU MEDIA HUB SERVER (FastAPI)
+[13:48:58] Starting services...
+
+========================================================================
+[13:48:58] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[13:48:58] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[13:48:58] --> ffmpeg is ready for thumbnail generation.
+[13:48:58] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[13:48:58] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[13:48:58] --> ffprobe is ready for media metadata.
+[13:48:58] --> Loaded 6008 indexed videos from SSD cache.
+[13:48:58] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[13:48:58] Roku Media Hub Server running on:
+[13:48:58]     http://192.168.0.230:8001
+[13:48:58]     http://127.0.0.1:8001
+[13:48:58] 
+[13:48:58] Interactive API Documentation (Swagger):
+[13:48:58]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[13:49:05] ROKU MEDIA HUB SERVER (FastAPI)
+[13:49:05] Starting services...
+
+========================================================================
+[13:49:05] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[13:49:05] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[13:49:05] --> ffmpeg is ready for thumbnail generation.
+[13:49:05] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[13:49:05] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[13:49:05] --> ffprobe is ready for media metadata.
+[13:49:05] --> Loaded 6008 indexed videos from SSD cache.
+[13:49:05] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[13:49:05] Roku Media Hub Server running on:
+[13:49:05]     http://192.168.0.230:8001
+[13:49:05]     http://127.0.0.1:8001
+[13:49:05] 
+[13:49:05] Interactive API Documentation (Swagger):
+[13:49:05]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[13:49:39] ROKU MEDIA HUB SERVER (FastAPI)
+[13:49:39] Starting services...
+
+========================================================================
+[13:49:39] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[13:49:39] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[13:49:39] --> ffmpeg is ready for thumbnail generation.
+[13:49:39] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[13:49:39] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[13:49:39] --> ffprobe is ready for media metadata.
+[13:49:39] --> Loaded 6008 indexed videos from SSD cache.
+[13:49:39] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[13:49:39] Roku Media Hub Server running on:
+[13:49:39]     http://192.168.0.230:8001
+[13:49:39]     http://127.0.0.1:8001
+[13:49:39] 
+[13:49:39] Interactive API Documentation (Swagger):
+[13:49:39]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[14:04:06] ROKU MEDIA HUB SERVER (FastAPI)
+[14:04:06] Starting services...
+
+========================================================================
+[14:04:06] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[14:04:06] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[14:04:06] --> ffmpeg is ready for thumbnail generation.
+[14:04:06] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[14:04:06] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[14:04:06] --> ffprobe is ready for media metadata.
+[14:04:06] --> Loaded 6008 indexed videos from SSD cache.
+[14:04:06] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[14:04:06] Roku Media Hub Server running on:
+[14:04:06]     http://192.168.0.230:8001
+[14:04:06]     http://127.0.0.1:8001
+[14:04:06] 
+[14:04:06] Interactive API Documentation (Swagger):
+[14:04:06]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[14:04:11] ROKU MEDIA HUB SERVER (FastAPI)
+[14:04:11] Starting services...
+
+========================================================================
+[14:04:11] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[14:04:11] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[14:04:11] --> ffmpeg is ready for thumbnail generation.
+[14:04:11] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[14:04:11] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[14:04:11] --> ffprobe is ready for media metadata.
+[14:04:11] --> Loaded 6008 indexed videos from SSD cache.
+[14:04:11] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[14:04:11] Roku Media Hub Server running on:
+[14:04:11]     http://192.168.0.230:8001
+[14:04:11]     http://127.0.0.1:8001
+[14:04:11] 
+[14:04:11] Interactive API Documentation (Swagger):
+[14:04:11]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[14:04:49] ROKU MEDIA HUB SERVER (FastAPI)
+[14:04:49] Starting services...
+
+========================================================================
+[14:04:49] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[14:04:49] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[14:04:49] --> ffmpeg is ready for thumbnail generation.
+[14:04:49] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[14:04:49] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[14:04:49] --> ffprobe is ready for media metadata.
+[14:04:49] --> Loaded 6008 indexed videos from SSD cache.
+[14:04:49] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[14:04:49] Roku Media Hub Server running on:
+[14:04:49]     http://192.168.0.230:8001
+[14:04:49]     http://127.0.0.1:8001
+[14:04:49] 
+[14:04:49] Interactive API Documentation (Swagger):
+[14:04:49]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[14:07:14] ROKU MEDIA HUB SERVER (FastAPI)
+[14:07:14] Starting services...
+
+========================================================================
+[14:07:14] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[14:07:14] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[14:07:14] --> ffmpeg is ready for thumbnail generation.
+[14:07:14] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[14:07:14] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[14:07:14] --> ffprobe is ready for media metadata.
+[14:07:14] --> Loaded 6008 indexed videos from SSD cache.
+[14:07:14] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[14:07:14] Roku Media Hub Server running on:
+[14:07:14]     http://192.168.0.230:8001
+[14:07:14]     http://127.0.0.1:8001
+[14:07:14] 
+[14:07:14] Interactive API Documentation (Swagger):
+[14:07:14]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[14:07:17] ROKU MEDIA HUB SERVER (FastAPI)
+[14:07:17] Starting services...
+
+========================================================================
+[14:07:17] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[14:07:17] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[14:07:17] --> ffmpeg is ready for thumbnail generation.
+[14:07:17] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[14:07:17] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[14:07:17] --> ffprobe is ready for media metadata.
+[14:07:17] --> Loaded 6008 indexed videos from SSD cache.
+[14:07:17] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[14:07:17] Roku Media Hub Server running on:
+[14:07:17]     http://192.168.0.230:8001
+[14:07:17]     http://127.0.0.1:8001
+[14:07:17] 
+[14:07:17] Interactive API Documentation (Swagger):
+[14:07:17]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[14:43:33] ROKU MEDIA HUB SERVER (FastAPI)
+[14:43:33] Starting services...
+
+========================================================================
+[14:43:33] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[14:43:33] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[14:43:33] --> ffmpeg is ready for thumbnail generation.
+[14:43:33] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[14:43:33] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[14:43:33] --> ffprobe is ready for media metadata.
+[14:43:33] --> Loaded 6008 indexed videos from SSD cache.
+[14:43:33] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[14:43:33] Roku Media Hub Server running on:
+[14:43:33]     http://192.168.0.230:8001
+[14:43:33]     http://127.0.0.1:8001
+[14:43:33] 
+[14:43:33] Interactive API Documentation (Swagger):
+[14:43:33]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[14:43:36] ROKU MEDIA HUB SERVER (FastAPI)
+[14:43:36] Starting services...
+
+========================================================================
+[14:43:36] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[14:43:36] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[14:43:36] --> ffmpeg is ready for thumbnail generation.
+[14:43:36] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[14:43:36] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[14:43:36] --> ffprobe is ready for media metadata.
+[14:43:36] --> Loaded 6008 indexed videos from SSD cache.
+[14:43:36] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[14:43:36] Roku Media Hub Server running on:
+[14:43:36]     http://192.168.0.230:8001
+[14:43:36]     http://127.0.0.1:8001
+[14:43:36] 
+[14:43:36] Interactive API Documentation (Swagger):
+[14:43:36]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[14:43:47] ROKU MEDIA HUB SERVER (FastAPI)
+[14:43:47] Starting services...
+
+========================================================================
+[14:43:47] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[14:43:47] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[14:43:47] --> ffmpeg is ready for thumbnail generation.
+[14:43:47] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[14:43:47] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[14:43:47] --> ffprobe is ready for media metadata.
+[14:43:48] --> Loaded 6008 indexed videos from SSD cache.
+[14:43:48] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[14:43:48] Roku Media Hub Server running on:
+[14:43:48]     http://192.168.0.230:8001
+[14:43:48]     http://127.0.0.1:8001
+[14:43:48] 
+[14:43:48] Interactive API Documentation (Swagger):
+[14:43:48]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[14:43:52] ROKU MEDIA HUB SERVER (FastAPI)
+[14:43:52] Starting services...
+
+========================================================================
+[14:43:52] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[14:43:52] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[14:43:52] --> ffmpeg is ready for thumbnail generation.
+[14:43:52] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[14:43:52] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[14:43:52] --> ffprobe is ready for media metadata.
+[14:43:52] --> Loaded 6008 indexed videos from SSD cache.
+[14:43:52] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[14:43:52] Roku Media Hub Server running on:
+[14:43:52]     http://192.168.0.230:8001
+[14:43:52]     http://127.0.0.1:8001
+[14:43:52] 
+[14:43:52] Interactive API Documentation (Swagger):
+[14:43:52]     http://192.168.0.230:8001/docs
+
+========================================================================
+
+========================================================================
+[14:43:56] ROKU MEDIA HUB SERVER (FastAPI)
+[14:43:56] Starting services...
+
+========================================================================
+[14:43:56] --> Found ffmpeg binary at: /opt/homebrew/bin/ffmpeg
+[14:43:56] --> ffmpeg test successful: ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers
+[14:43:56] --> ffmpeg is ready for thumbnail generation.
+[14:43:56] --> Found ffprobe binary at: /opt/homebrew/bin/ffprobe
+[14:43:56] --> ffprobe test successful: ffprobe version 9.0.1 Copyright (c) 2007-2026 the FFmpeg developers
+[14:43:56] --> ffprobe is ready for media metadata.
+[14:43:56] --> Loaded 6008 indexed videos from SSD cache.
+[14:43:56] --> Real-time file watcher started on /Volumes
+
+========================================================================
+[14:43:56] Roku Media Hub Server running on:
+[14:43:56]     http://192.168.0.230:8001
+[14:43:56]     http://127.0.0.1:8001
+[14:43:56] 
+[14:43:56] Interactive API Documentation (Swagger):
+[14:43:56]     http://192.168.0.230:8001/docs
+
+========================================================================

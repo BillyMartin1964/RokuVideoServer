@@ -3,6 +3,7 @@
 import os
 import socket
 import threading
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request, status
@@ -22,6 +23,14 @@ from services import (
     video_service,
     watcher_service,
 )
+
+# ============================================================================
+# Client Tracker Memory Store
+# ============================================================================
+
+CLIENT_ACTIVITY: dict[str, float] = {}
+CLIENT_LOCK = threading.Lock()
+START_TIME = time.time()
 
 
 def get_local_ip():
@@ -156,15 +165,74 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def track_connected_clients(request: Request, call_next):
+    """Tracks unique client IPs and their last active timestamps."""
+    client_ip = request.client.host if request.client else "unknown"
+
+    with CLIENT_LOCK:
+        CLIENT_ACTIVITY[client_ip] = time.time()
+
+    response = await call_next(request)
+    return response
+
+
 # ============================================================================
-# HEALTH ENDPOINTS
+# HEALTH & CLIENT ENDPOINTS
 # ============================================================================
 
 
 @app.get("/api/health", tags=["Health"])
 def get_health(request: Request):
-    """Return server health and status information."""
-    return api_health.handle_get_health(request)
+    """Return server health and status information including client metrics."""
+    base_response = api_health.handle_get_health(request)
+
+    now = time.time()
+    five_mins_ago = now - 300
+    twenty_four_hours_ago = now - 86400
+
+    with CLIENT_LOCK:
+        active_clients = sum(
+            1 for last_seen in CLIENT_ACTIVITY.values() if last_seen >= five_mins_ago
+        )
+        clients_24h = sum(
+            1 for last_seen in CLIENT_ACTIVITY.values() if last_seen >= twenty_four_hours_ago
+        )
+
+    if isinstance(base_response, dict):
+        base_response["activeClients"] = active_clients
+        base_response["clients24h"] = clients_24h
+        base_response["start_time"] = START_TIME
+        
+        # Ensure driveCount is present if omitted
+        if "driveCount" not in base_response and "drive_count" not in base_response:
+            base_response["driveCount"] = len(config.FILE_MAP) if hasattr(config, "FILE_MAP") else 0
+
+    return base_response
+
+
+@app.get("/api/clients", tags=["Health"])
+def get_connected_clients():
+    """Return connected client analytics and recently seen IP addresses."""
+    now = time.time()
+    five_mins_ago = now - 300
+    twenty_four_hours_ago = now - 86400
+
+    with CLIENT_LOCK:
+        active_ips = [
+            ip for ip, last_seen in CLIENT_ACTIVITY.items() if last_seen >= five_mins_ago
+        ]
+        recent_24h_ips = [
+            ip for ip, last_seen in CLIENT_ACTIVITY.items() if last_seen >= twenty_four_hours_ago
+        ]
+
+    return {
+        "success": True,
+        "activeClientsCount": len(active_ips),
+        "clients24hCount": len(recent_24h_ips),
+        "activeClientIps": active_ips,
+        "recent24hClientIps": recent_24h_ips,
+    }
 
 
 # ============================================================================
@@ -244,21 +312,6 @@ def get_child_directories(
 
 # ============================================================================
 # VIDEO MODEL ENDPOINTS
-# ============================================================================
-#
-# These endpoints deal with VIDEO DATA.
-#
-# They do NOT stream video bytes.
-#
-# GET /api/video-models/{file_id}
-#     Returns the complete VideoModel as JSON.
-#
-# GET /api/video-models/{file_id}/thumbnail
-#     Returns the actual thumbnail JPEG.
-#
-# GET /api/video-models
-#     Returns VideoModels for a drive/directory.
-#
 # ============================================================================
 
 
@@ -348,10 +401,6 @@ def get_video_model_thumbnail(
 # ============================================================================
 # VIDEO MANAGEMENT ENDPOINTS
 # ============================================================================
-#
-# These operate on the VideoModel/catalog and physical video files.
-#
-# ============================================================================
 
 
 @app.post(
@@ -401,15 +450,6 @@ def delete_video(
 
 # ============================================================================
 # VIDEO STREAMING ENDPOINTS
-# ============================================================================
-#
-# Streaming is deliberately separate from VideoModel data.
-#
-# GET  /api/videos/{file_id}
-# HEAD /api/videos/{file_id}
-#
-# These endpoints return actual video bytes.
-#
 # ============================================================================
 
 
