@@ -22,6 +22,9 @@ from config import (
 )
 from services import ffmpeg_service, thumbnail_service, video_service
 
+# Capture server boot timestamp (Unix epoch time)
+SERVER_START_TIME = time.time()
+
 
 def get_local_ip():
     try:
@@ -57,6 +60,11 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
 
     def send_json_response(self, data, status=200):
+        # Automatically inject start_time into any dictionary response if needed, 
+        # or rely on api_videos.handle_get_health to include it.
+        if isinstance(data, dict) and "start_time" not in data:
+            data["start_time"] = SERVER_START_TIME
+            
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")

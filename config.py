@@ -1,4 +1,6 @@
+import logging
 import os
+import sys
 import threading
 import time
 
@@ -12,6 +14,9 @@ FILE_CACHE_FILE = "/tmp/roku_files_cache.json"
 DEFAULT_POSTER_FILE = os.path.join(THUMB_CACHE_DIR, "default_poster.jpg")
 PLAYBACK_POSITIONS_FILE = os.path.join(
     os.path.dirname(__file__), "data", "playback.json"
+)
+LOG_FILE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "server_activity.log"
 )
 
 # Stream & Scan Settings
@@ -84,12 +89,40 @@ SERVER_START_TIME = time.time()
 os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(PLAYBACK_POSITIONS_FILE), exist_ok=True)
 
+import logging
+from logging.handlers import TimedRotatingFileHandler
+
+# Logger Setup
+_logger = logging.getLogger("RokuServerNew")
+_logger.setLevel(logging.INFO)
+
+if not _logger.handlers:
+    # Rotates daily at midnight and keeps a rolling 7-day log history
+    _file_handler = TimedRotatingFileHandler(
+        LOG_FILE_PATH,
+        when="midnight",
+        interval=1,
+        backupCount=7,
+        encoding="utf-8"
+    )
+    _file_handler.suffix = "%Y-%m-%d"
+    _file_handler.setFormatter(logging.Formatter("%(message)s"))
+
+    _console_handler = logging.StreamHandler(sys.stdout)
+    _console_handler.setFormatter(logging.Formatter("%(message)s"))
+
+    _logger.addHandler(_file_handler)
+    _logger.addHandler(_console_handler)
+
 
 def log(message):
     timestamp = time.strftime("%H:%M:%S")
-    print(f"[{timestamp}] {message}", flush=True)
+    formatted_msg = f"[{timestamp}] {message}"
+    _logger.info(formatted_msg)
+    sys.stdout.flush()
 
 
 def log_separator():
-    print(flush=True)
-    print("=" * 72, flush=True)
+    _logger.info("")
+    _logger.info("=" * 72)
+    sys.stdout.flush()

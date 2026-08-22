@@ -80,11 +80,23 @@ def save_disk_cache():
         with CACHE_LOCK:
             data = list(config.FILES_LIST)
 
+        cache_dir = os.path.dirname(FILE_CACHE_FILE)
+        if cache_dir and not os.path.exists(cache_dir):
+            os.makedirs(cache_dir, exist_ok=True)
+
         temp_file = FILE_CACHE_FILE + ".tmp"
+        
         with open(temp_file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
 
-        os.replace(temp_file, FILE_CACHE_FILE)
+        try:
+            os.replace(temp_file, FILE_CACHE_FILE)
+        except OSError:
+            with open(FILE_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+
         log("--> Updated SSD disk cache file.")
     except Exception as ex:
         log(f"<!> Error writing SSD disk cache: {type(ex).__name__}: {ex}")
