@@ -11,7 +11,7 @@ class VideoModel(BaseModel):
         - actual video bytes
         - actual thumbnail image bytes
 
-    posterUrl / hdPosterUrl point to the thumbnail endpoint.
+    thumbnailUrl points to the thumbnail endpoint.
 
     streamUrl points to the video streaming endpoint.
     """
@@ -48,9 +48,7 @@ class VideoModel(BaseModel):
 
     streamUrl: str = ""
 
-    hdPosterUrl: str = ""
-
-    posterUrl: str = ""
+    thumbnailUrl: str = ""
 
     # ------------------------------------------------------------------------
     # Video metadata
@@ -114,40 +112,25 @@ def create_video_model(
     # ID
     # ------------------------------------------------------------------------
 
-    raw_id = str(
-        data.get("id")
-        or data.get("fileId")
-        or ""
-    )
+    raw_id = str(data.get("id") or data.get("fileId") or "")
 
     # ------------------------------------------------------------------------
     # Name
     # ------------------------------------------------------------------------
 
-    raw_name = str(
-        data.get("name")
-        or ""
-    )
+    raw_name = str(data.get("name") or "")
 
     # ------------------------------------------------------------------------
     # Path
     # ------------------------------------------------------------------------
 
-    raw_path = str(
-        data.get("path")
-        or data.get("fullPath")
-        or ""
-    )
+    raw_path = str(data.get("path") or data.get("fullPath") or "")
 
     # ------------------------------------------------------------------------
     # Extension
     # ------------------------------------------------------------------------
 
-    raw_ext = str(
-        data.get("ext")
-        or data.get("extension")
-        or ""
-    )
+    raw_ext = str(data.get("ext") or data.get("extension") or "")
 
     if not raw_ext and raw_path and "." in raw_path:
         raw_ext = raw_path.rsplit(".", 1)[-1]
@@ -159,20 +142,13 @@ def create_video_model(
     # Title
     # ------------------------------------------------------------------------
 
-    raw_title = str(
-        data.get("title")
-        or raw_name
-        or "Untitled"
-    )
+    raw_title = str(data.get("title") or raw_name or "Untitled")
 
     # ------------------------------------------------------------------------
     # File name
     # ------------------------------------------------------------------------
 
-    supplied_file_name = str(
-        data.get("fileName")
-        or ""
-    )
+    supplied_file_name = str(data.get("fileName") or "")
 
     if supplied_file_name:
         file_name = supplied_file_name
@@ -185,29 +161,19 @@ def create_video_model(
     # Drive
     # ------------------------------------------------------------------------
 
-    drive = str(
-        data.get("drive")
-        or ""
-    )
+    drive = str(data.get("drive") or "")
 
     # ------------------------------------------------------------------------
     # Directory
     # ------------------------------------------------------------------------
 
-    directory = str(
-        data.get("directory")
-        or data.get("subfolder")
-        or ""
-    )
+    directory = str(data.get("directory") or data.get("subfolder") or "")
 
     # ------------------------------------------------------------------------
     # Description
     # ------------------------------------------------------------------------
 
-    description = str(
-        data.get("description")
-        or ""
-    )
+    description = str(data.get("description") or "")
 
     # ------------------------------------------------------------------------
     # Duration
@@ -246,10 +212,7 @@ def create_video_model(
     # Release date
     # ------------------------------------------------------------------------
 
-    release_date = str(
-        data.get("releaseDate")
-        or ""
-    )
+    release_date = str(data.get("releaseDate") or "")
 
     # ------------------------------------------------------------------------
     # Categories
@@ -258,10 +221,7 @@ def create_video_model(
     categories_value = data.get("categories") or []
 
     if isinstance(categories_value, list):
-        categories = [
-            str(category)
-            for category in categories_value
-        ]
+        categories = [str(category) for category in categories_value]
     else:
         categories = []
 
@@ -285,26 +245,11 @@ def create_video_model(
     # ------------------------------------------------------------------------
 
     poster_url = str(
-        data.get("posterUrl")
-        or data.get("thumbnail")
-        or data.get("poster")
-        or ""
+        data.get("thumbnailUrl") or data.get("thumbnail") or data.get("poster") or ""
     )
 
-    hd_poster_url = str(
-        data.get("hdPosterUrl")
-        or ""
-    )
-
-    if raw_id and clean_base:
-
-        if not poster_url:
-            poster_url = (
-                f"{clean_base}/api/thumbnails/{raw_id}"
-            )
-
-        if not hd_poster_url:
-            hd_poster_url = poster_url
+    if raw_id and clean_base and not poster_url:
+        poster_url = f"{clean_base}/api/thumbnails/{raw_id}"
 
     # ------------------------------------------------------------------------
     # Stream URL
@@ -314,16 +259,10 @@ def create_video_model(
     # The streaming endpoint returns the actual video bytes later.
     # ------------------------------------------------------------------------
 
-    stream_url = str(
-        data.get("streamUrl")
-        or data.get("url")
-        or ""
-    )
+    stream_url = str(data.get("streamUrl") or data.get("url") or "")
 
     if raw_id and clean_base:
-        stream_url = (
-            f"{clean_base}/api/files/{raw_id}"
-        )
+        stream_url = f"{clean_base}/api/videos/{raw_id}"
 
     # ------------------------------------------------------------------------
     # Create the actual Pydantic model
@@ -344,8 +283,7 @@ def create_video_model(
         duration=duration,
         height=height,
         width=width,
-        hdPosterUrl=hd_poster_url,
-        posterUrl=poster_url,
+        thumbnailUrl=poster_url,
         releaseDate=release_date,
         categories=categories,
         bookmarkPosition=bookmark_position,

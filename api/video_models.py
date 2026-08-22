@@ -89,7 +89,7 @@ def _model_to_dict(item: dict, base_url: str) -> dict:
     file_id = model.id
 
     if file_id:
-        model.posterUrl = f"{base_url}/api/video-models/{file_id}/thumbnail"
+        model.thumbnailUrl = f"{base_url}/api/video-models/{file_id}/thumbnail"
 
     return model.model_dump()
 

@@ -3,7 +3,6 @@ from pathlib import Path
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-
 # ============================================================================
 # DIRECTORY FILTERING
 # ============================================================================
@@ -125,6 +124,40 @@ def _get_directory_path(
     return drive_path / relative_directory
 
 
+def _get_directory_path_parts(directory_path: str) -> list[str]:
+    """
+    Return the directory hierarchy as a list of path components.
+
+    Examples:
+
+        "/Movies"
+            -> ["Movies"]
+
+        "/Movies/Action"
+            -> ["Movies", "Action"]
+
+        "/Movies/Action/Marvel/2025"
+            -> ["Movies", "Action", "Marvel", "2025"]
+
+        ""
+            -> []
+
+    The drive name is intentionally NOT included.
+    """
+
+    normalized_directory = _normalize_path(directory_path)
+
+    if not normalized_directory:
+        return []
+
+    relative_path = normalized_directory.lstrip("/")
+
+    if not relative_path:
+        return []
+
+    return [part for part in relative_path.split("/") if part]
+
+
 def _create_directory_item(
     drive_name: str,
     directory_path: str,
@@ -137,19 +170,23 @@ def _create_directory_item(
     Example:
 
         drive_name = "Vids2"
-        directory_path = "/1080p"
+        directory_path = "/Movies/Action/2025"
 
     Produces an item representing:
 
-        /Volumes/Vids2/1080p
+        /Volumes/Vids2/Movies/Action/2025
+
+    The complete directory hierarchy is preserved in:
+
+        path
+        depth
+        parent
     """
 
     normalized_directory = _normalize_path(directory_path)
 
     title = (
-        normalized_directory.rsplit("/", 1)[-1]
-        if normalized_directory
-        else drive_name
+        normalized_directory.rsplit("/", 1)[-1] if normalized_directory else drive_name
     )
 
     dir_key = f"{drive_name}|{normalized_directory}"
@@ -159,6 +196,15 @@ def _create_directory_item(
     else:
         display_name = drive_name
 
+    path_parts = _get_directory_path_parts(normalized_directory)
+
+    depth = len(path_parts)
+
+    if len(path_parts) > 1:
+        parent = path_parts[-2]
+    else:
+        parent = ""
+
     return {
         "drive": drive_name,
         "subfolder": normalized_directory,
@@ -166,6 +212,23 @@ def _create_directory_item(
         "thumbUrl": "",
         "name": display_name,
         "title": title,
+        # Complete directory hierarchy.
+        #
+        # Example:
+        # /Movies/Action/Marvel/2025
+        #
+        # becomes:
+        # ["Movies", "Action", "Marvel", "2025"]
+        "path": path_parts,
+        # Number of directory levels represented by path.
+        "depth": depth,
+        # Immediate parent directory.
+        #
+        # For:
+        # ["Movies", "Action", "Marvel", "2025"]
+        #
+        # parent = "Marvel"
+        "parent": parent,
     }
 
 
@@ -365,9 +428,7 @@ def handle_get_all_directories(request: Request):
 #
 # GET /api/directories/drive/Vids2
 #
-# Returns ONLY the immediate physical child directories of:
-#
-#   /Volumes/Vids2
+# Returns ONLY the immediate physical child directories of a drive.
 #
 # It does NOT return:
 #
