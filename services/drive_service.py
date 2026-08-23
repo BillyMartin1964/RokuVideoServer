@@ -57,7 +57,9 @@ def save_authorized_drives(drives: list[str]) -> bool:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 
-        log(f"[*] Successfully updated authorized_drives.json with {len(clean_drives)} drive(s).")
+        log(
+            f"[*] Successfully updated authorized_drives.json with {len(clean_drives)} drive(s)."
+        )
         return True
     except (OSError, TypeError, ValueError) as ex:
         log(f"<!> Failed to write authorized_drives.json: {ex}")
@@ -162,6 +164,8 @@ def get_drives_response(only_authorized: bool = False) -> dict:
     drives = get_system_drives(only_authorized=only_authorized)
     return {
         "success": True,
-        "drives": drives,
-        "count": len(drives),
+        "data": drives,  # ✅ Added for Roku BrightScript
+        "drives": drives,  # ✅ Kept for Swift UI
+        "total": len(drives),  # ✅ Added for Roku BrightScript
+        "count": len(drives),  # ✅ Kept for Swift UI
     }
