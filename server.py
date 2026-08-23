@@ -140,7 +140,8 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         # Fetch USB Drives metadata
         if url_path == "/api/drives":
-            api_drives.handle_get_drives(self)
+            include_all = query_params.get("all", ["false"])[0].lower() == "true"
+            api_drives.handle_get_drives(self, include_all=include_all)
             return
 
         # Fetch directories (handles all directories OR drive-filtered queries)
@@ -194,6 +195,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             body = json.loads(post_data.decode("utf-8")) if post_data else {}
         except Exception:
             body = {}
+
+        if url_path == "/api/drives" or url_path == "/api/authorized-drives":
+            api_drives.handle_set_authorized_drives(self, body)
+            return
 
         if url_path == "/api/files/move":
             api_videos.handle_move_file(self, body)
