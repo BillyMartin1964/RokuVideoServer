@@ -1,10 +1,83 @@
 #!/usr/bin/env python3
 
+import json
 import os
 import shutil
+from pathlib import Path
 
 import config
 from config import CACHE_LOCK, IGNORED_DIRS, VOLUMES_DIR, log
+
+CONFIG_FILE = Path("authorized_drives.json")
+
+
+# ============================================================================
+# AUTHORIZED DRIVES PERSISTENCE
+# ============================================================================
+
+
+def get_authorized_drives() -> set[str]:
+    """
+    Read authorized drive names from authorized_drives.json.
+
+    Returns a set of drive names (e.g., {"Vids1", "Vids2"}).
+    If the file does not exist or is invalid, returns an empty set.
+    """
+    if not CONFIG_FILE.exists():
+        return set()
+
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            drives = data.get("authorized_drives", [])
+            return {
+                drive.strip()
+                for drive in drives
+                if isinstance(drive, str) and drive.strip()
+            }
+    except (OSError, json.JSONDecodeError, ValueError) as ex:
+        log(f"<!> Failed to read authorized_drives.json: {ex}")
+        return set()
+
+
+def save_authorized_drives(drives: list[str]) -> bool:
+    """
+    Save a list of authorized drive names to authorized_drives.json.
+    """
+    try:
+        clean_drives = sorted(
+            {
+                drive.strip()
+                for drive in drives
+                if isinstance(drive, str) and drive.strip()
+            }
+        )
+        payload = {"authorized_drives": clean_drives}
+
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+
+        log(f"[*] Successfully updated authorized_drives.json with {len(clean_drives)} drive(s).")
+        return True
+    except (OSError, TypeError, ValueError) as ex:
+        log(f"<!> Failed to write authorized_drives.json: {ex}")
+        return False
+
+
+def is_drive_authorized(drive_name: str) -> bool:
+    """
+    Check whether a specific drive name is authorized in authorized_drives.json.
+    """
+    if not drive_name or not drive_name.strip():
+        return False
+
+    authorized = get_authorized_drives()
+    return drive_name.strip() in authorized
+
+
+# ============================================================================
+# SYSTEM DRIVE INSPECTION & METADATA
+# ============================================================================
 
 
 def get_indexed_drive_thumbnail(vol_name: str) -> str:
@@ -16,12 +89,19 @@ def get_indexed_drive_thumbnail(vol_name: str) -> str:
     return ""
 
 
-def get_system_drives() -> list[dict]:
-    """Reads volumes directory and returns raw drive metadata list."""
+def get_system_drives(only_authorized: bool = False) -> list[dict]:
+    """
+    Reads volumes directory and returns raw drive metadata list.
+
+    Includes an 'authorized' boolean flag on every item.
+    If only_authorized is True, filters out drives where authorized is False.
+    """
     drive_list = []
 
     if not os.path.exists(VOLUMES_DIR):
         return drive_list
+
+    authorized_set = get_authorized_drives()
 
     try:
         for vol_name in os.listdir(VOLUMES_DIR):
@@ -29,6 +109,12 @@ def get_system_drives() -> list[dict]:
                 continue
 
             if vol_name == "Macintosh HD":
+                continue
+
+            is_auth = vol_name in authorized_set
+
+            # Filter if caller requested only authorized drives
+            if only_authorized and not is_auth:
                 continue
 
             vol_path = os.path.join(VOLUMES_DIR, vol_name)
@@ -45,6 +131,7 @@ def get_system_drives() -> list[dict]:
                 "name": vol_name,
                 "title": vol_name,
                 "path": vol_path,
+                "authorized": is_auth,
                 "thumbUrl": "",
                 "totalBytes": 0,
                 "freeBytes": 0,
@@ -70,9 +157,9 @@ def get_system_drives() -> list[dict]:
     return drive_list
 
 
-def get_drives_response() -> dict:
+def get_drives_response(only_authorized: bool = False) -> dict:
     """Return wrapped JSON structure for drives API."""
-    drives = get_system_drives()
+    drives = get_system_drives(only_authorized=only_authorized)
     return {
         "success": True,
         "drives": drives,

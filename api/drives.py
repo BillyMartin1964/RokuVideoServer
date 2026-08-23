@@ -1,41 +1,66 @@
 #!/usr/bin/env python3
 
+import json
+
 from fastapi import Request
+from fastapi.responses import JSONResponse
 
-import config
-from services import drive_service
-
-
-def handle_get_drives(request: Request | None = None) -> dict:
-    """Return available physical drives and authorized mount point status."""
-    return drive_service.get_drives_response()
+from services.drive_service import (
+    get_drives_response,
+    save_authorized_drives,
+)
 
 
-def handle_set_authorized_drives(
-    request: Request | None = None,
-    data: dict | None = None,
-) -> dict:
-    """Set authorized drives and update persisted mount points configuration."""
-    if not data:
-        return {
-            "success": False,
-            "error": "Missing request body",
-            "drives": drive_service.get_drives_response().get("drives", []),
+def handle_get_drives(request: Request, include_all: bool = False) -> JSONResponse:
+    """
+    Return drives response.
+
+    If include_all is False (default), returns ONLY authorized drives for Roku.
+    If include_all is True, returns ALL drives with 'authorized' booleans for Swift.
+    """
+    del request
+    # only_authorized is True when include_all is False
+    response_data = get_drives_response(only_authorized=not include_all)
+    return JSONResponse(content=response_data)
+
+
+def handle_set_authorized_drives(request: Request, body: dict) -> JSONResponse:
+    """
+    Set authorized drives list from a dict body (passed by server.py handler).
+
+    Expected body payload:
+      { "authorized_drives": ["Vids1", "Vids2"] }
+    """
+    del request
+    drives = body.get("authorized_drives", [])
+
+    if not isinstance(drives, list):
+        return JSONResponse(
+            content={
+                "success": False,
+                "error": "Invalid payload format. Expected array of drive names.",
+            },
+            status_code=400,
+        )
+
+    success = save_authorized_drives(drives)
+    return JSONResponse(
+        content={
+            "success": success,
+            "authorized_drives": drives if success else [],
         }
+    )
 
-    authorized_drives = data.get("authorized_drives", [])
-    if not isinstance(authorized_drives, list):
-        return {
-            "success": False,
-            "error": "authorized_drives must be a list of paths",
-            "drives": drive_service.get_drives_response().get("drives", []),
-        }
 
-    # Execute save_authorized_mountpoints dynamically if present on config
-    save_fn = getattr(config, "save_authorized_mountpoints", None)
-    if callable(save_fn):
-        save_fn(authorized_drives)
-    else:
-        config.__dict__["AUTHORIZED_MOUNTPOINTS"] = authorized_drives
-
-    return drive_service.get_drives_response()
+async def handle_update_authorized_drives(request: Request) -> JSONResponse:
+    """
+    Update authorized drives list from a raw POST JSON request.
+    """
+    try:
+        body = await request.json()
+        return handle_set_authorized_drives(request, body)
+    except (json.JSONDecodeError, TypeError, ValueError) as ex:
+        return JSONResponse(
+            content={"success": False, "error": f"Failed to process request: {ex}"},
+            status_code=400,
+        )

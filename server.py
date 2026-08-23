@@ -262,11 +262,20 @@ def set_authorized_drives(
         body.model_dump() if hasattr(body, "model_dump") else body.dict(),
     )
 
-
 @app.get("/api/drives", tags=["Hard Drives"])
-def get_drives(request: Request):
-    """Return available physical drives and volume metadata."""
-    return api_drives.handle_get_drives(request)
+def get_drives(
+    request: Request,
+    include_all: bool = Query(
+        False,
+        alias="all",
+        description="Set to true to return all drives with authorization status.",
+    ),
+):
+    """
+    Return available physical drives and volume metadata.
+    Defaults to returning authorized drives only.
+    """
+    return api_drives.handle_get_drives(request, include_all=include_all)
 
 
 # ============================================================================
