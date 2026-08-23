@@ -1,19 +1,22 @@
+#!/usr/bin/env python3
+
 import os
 import shutil
+
 import config
-from config import VOLUMES_DIR, IGNORED_DIRS, CACHE_LOCK, log
+from config import CACHE_LOCK, IGNORED_DIRS, VOLUMES_DIR, log
 
 
 def get_indexed_drive_thumbnail(vol_name: str) -> str:
     """Finds the first indexed thumbnail ID for a volume without holding the lock too long."""
     with CACHE_LOCK:
-        for item in config.FILES_LIST:
+        for item in getattr(config, "FILES_LIST", []):
             if item.get("drive") == vol_name and item.get("id"):
                 return item["id"]
     return ""
 
 
-def get_system_drives() -> list:
+def get_system_drives() -> list[dict]:
     """Reads volumes directory and returns raw drive metadata list."""
     drive_list = []
 
@@ -56,12 +59,22 @@ def get_system_drives() -> list:
 
             thumb_id = get_indexed_drive_thumbnail(vol_name)
             if thumb_id:
-                drive_info["thumbUrl"] = f"/api/thumbnails/{thumb_id}"
+                drive_info["thumbUrl"] = f"/api/video-models/{thumb_id}/thumbnail"
 
             drive_list.append(drive_info)
 
-    except Exception as ex:
+    except (OSError, PermissionError, FileNotFoundError) as ex:
         log(f"<!> Error reading drives from {VOLUMES_DIR}: {type(ex).__name__}: {ex}")
 
     drive_list.sort(key=lambda x: x["drive"].lower())
     return drive_list
+
+
+def get_drives_response() -> dict:
+    """Return wrapped JSON structure for drives API."""
+    drives = get_system_drives()
+    return {
+        "success": True,
+        "drives": drives,
+        "count": len(drives),
+    }

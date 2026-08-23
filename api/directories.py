@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 from pathlib import Path
 
 from fastapi import Request
@@ -45,10 +47,7 @@ def _should_ignore_directory(directory_name: str) -> bool:
     if directory_name.startswith("."):
         return True
 
-    if directory_name.lower() in IGNORED_DIRECTORY_NAMES:
-        return True
-
-    return False
+    return directory_name.lower() in IGNORED_DIRECTORY_NAMES
 
 
 # ============================================================================
@@ -212,44 +211,14 @@ def _create_directory_item(
         "thumbUrl": "",
         "name": display_name,
         "title": title,
-        # Complete directory hierarchy.
-        #
-        # Example:
-        # /Movies/Action/Marvel/2025
-        #
-        # becomes:
-        # ["Movies", "Action", "Marvel", "2025"]
         "path": path_parts,
-        # Number of directory levels represented by path.
         "depth": depth,
-        # Immediate parent directory.
-        #
-        # For:
-        # ["Movies", "Action", "Marvel", "2025"]
-        #
-        # parent = "Marvel"
         "parent": parent,
     }
 
 
 # ============================================================================
 # IMMEDIATE CHILD DIRECTORY DISCOVERY
-# ============================================================================
-#
-# This is the core directory-navigation operation.
-#
-# It reads the actual filesystem and returns ONLY immediate directories.
-#
-# It does NOT:
-#   - inspect config.FILES_LIST
-#   - inspect indexed videos
-#   - recursively scan descendants
-#   - return files
-#   - generate thumbnails
-#
-# It DOES:
-#   - hide dot-prefixed directories
-#   - hide explicitly ignored system/server directories
 # ============================================================================
 
 
@@ -260,41 +229,6 @@ def _get_immediate_child_directories(
     """
     Return only the immediate physical child directories beneath
     the selected directory.
-
-    Examples:
-
-        /Volumes/Vids2
-            /0T
-            /0U
-            /Movies
-                /Action
-                    /2024
-                /Comedy
-
-    For:
-
-        drive_name = "Vids2"
-        parent_directory = ""
-
-    returns:
-
-        /0T
-        /0U
-        /Movies
-
-    For:
-
-        drive_name = "Vids2"
-        parent_directory = "/Movies"
-
-    returns:
-
-        /Movies/Action
-        /Movies/Comedy
-
-    It does NOT return:
-
-        /Movies/Action/2024
     """
 
     target_path = _get_directory_path(
@@ -345,22 +279,6 @@ def _get_immediate_child_directories(
 
 # ============================================================================
 # GET ALL DIRECTORIES
-# ============================================================================
-#
-# GET /api/directories
-#
-# Returns the immediate top-level directories for all currently mounted
-# drives.
-#
-# This endpoint does NOT flatten the directory hierarchy.
-#
-# Example:
-#
-#   Vids2
-#       /0T
-#       /0U
-#       /1080p
-#
 # ============================================================================
 
 
@@ -423,22 +341,6 @@ def handle_get_all_directories(request: Request):
 # ============================================================================
 # GET DIRECTORIES FOR A DRIVE
 # ============================================================================
-#
-# GET /api/directories?drive=Vids2
-#
-# GET /api/directories/drive/Vids2
-#
-# Returns ONLY the immediate physical child directories of a drive.
-#
-# It does NOT return:
-#
-#   Vids2
-#
-# as a directory.
-#
-# It does NOT return nested descendants.
-#
-# ============================================================================
 
 
 def handle_get_directories_by_drive(
@@ -492,29 +394,6 @@ def handle_get_directories_by_drive(
 
 # ============================================================================
 # GET SUBDIRECTORIES FOR A DIRECTORY
-# ============================================================================
-#
-# GET /api/directories/subdirectories
-#
-# Parameters:
-#
-#   drive=Vids2
-#   directory=/Movies
-#
-# Returns ONLY the immediate physical child directories of:
-#
-#   /Volumes/Vids2/Movies
-#
-# It does NOT:
-#   - return the selected directory itself
-#   - return grandchildren
-#   - inspect indexed videos
-#   - use VideoModel
-#   - return videos
-#
-# This is the endpoint the Roku application can use when the user selects
-# a directory and we need to determine whether it contains subdirectories.
-#
 # ============================================================================
 
 
@@ -579,22 +458,6 @@ def handle_get_subdirectories(
 # ============================================================================
 # LEGACY CHILD DIRECTORY ENDPOINT
 # ============================================================================
-#
-# GET /api/directories/children
-#
-# Parameters:
-#
-#   drive=Vids2
-#   directory=/Movies
-#
-# This currently performs the same operation as:
-#
-#   GET /api/directories/subdirectories
-#
-# It is retained temporarily so the existing Roku/API architecture is not
-# broken while we transition to the clearer "subdirectories" terminology.
-#
-# ============================================================================
 
 
 def handle_get_child_directories(
@@ -604,9 +467,7 @@ def handle_get_child_directories(
 ):
     """
     Return only the immediate physical child directories beneath
-    the selected directory.
-
-    This is retained as a compatibility endpoint.
+    the selected directory. Retained as a compatibility endpoint.
     """
 
     return handle_get_subdirectories(

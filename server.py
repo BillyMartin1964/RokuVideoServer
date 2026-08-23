@@ -64,6 +64,14 @@ def get_local_ip():
 # ============================================================================
 
 
+class SetAuthorizedDrivesRequest(BaseModel):
+    authorized_drives: list[str] = Field(
+        ...,
+        json_schema_extra={"example": ["/Volumes/MediaDrive", "/Volumes/External1"]},
+        description="List of drive mount points authorized for API access.",
+    )
+
+
 class MoveVideoRequest(BaseModel):
     file_id: str = Field(
         ...,
@@ -203,7 +211,7 @@ def get_health(request: Request):
         base_response["activeClients"] = active_clients
         base_response["clients24h"] = clients_24h
         base_response["start_time"] = START_TIME
-        
+
         # Ensure driveCount is present if omitted
         if "driveCount" not in base_response and "drive_count" not in base_response:
             base_response["driveCount"] = len(config.FILE_MAP) if hasattr(config, "FILE_MAP") else 0
@@ -240,7 +248,22 @@ def get_connected_clients():
 # ============================================================================
 
 
-@app.get("/api/drives", tags=["Drives"])
+@app.post(
+    "/api/drives",
+    tags=["Hard Drives"],
+)
+def set_authorized_drives(
+    request: Request,
+    body: SetAuthorizedDrivesRequest,
+):
+    """Set drives that users can see."""
+    return api_drives.handle_set_authorized_drives(
+        request,
+        body.model_dump() if hasattr(body, "model_dump") else body.dict(),
+    )
+
+
+@app.get("/api/drives", tags=["Hard Drives"])
 def get_drives(request: Request):
     """Return available physical drives and volume metadata."""
     return api_drives.handle_get_drives(request)
@@ -299,7 +322,7 @@ def get_child_directories(
     drive: str,
     directory: str = Query(
         "",
-        description=("Directory whose immediate child directories should be returned."),
+        description="Directory whose immediate child directories should be returned.",
     ),
 ):
     """Return only the immediate child directories."""
