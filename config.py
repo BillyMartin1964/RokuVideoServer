@@ -3,6 +3,8 @@ import os
 import sys
 import threading
 import time
+from logging.handlers import TimedRotatingFileHandler
+from typing import Any
 
 # Network & Server Settings
 PORT = 8001
@@ -37,10 +39,6 @@ CHUNK_SIZE = 512 * 1024
 REFRESH_INTERVAL_SECONDS = 600
 
 # Thumbnail Settings
-
-# THUMB_WIDTH = 384
-# THUMB_HEIGHT = 216
-
 THUMB_WIDTH = 592
 THUMB_HEIGHT = 333
 
@@ -93,17 +91,18 @@ VIDEO_FORMATS = {
 
 # Global Shared State
 CACHE_LOCK = threading.Lock()
-FILE_MAP = {}
-FILES_LIST = []
+FILE_MAP: dict[str, dict[str, Any]] = {}
+FILES_LIST: list[dict[str, Any]] = []
+
+# Directory Index Cache (dirKey -> DirectoryModel dict)
+DIRECTORIES_MAP: dict[str, dict[str, Any]] = {}
+
 SCAN_IN_PROGRESS = False
 SERVER_START_TIME = time.time()
 
 # Ensure directories exist
 os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(PLAYBACK_POSITIONS_FILE), exist_ok=True)
-
-import logging
-from logging.handlers import TimedRotatingFileHandler
 
 # Logger Setup
 _logger = logging.getLogger("RokuServerNew")
@@ -116,7 +115,7 @@ if not _logger.handlers:
         when="midnight",
         interval=1,
         backupCount=7,
-        encoding="utf-8"
+        encoding="utf-8",
     )
     _file_handler.suffix = "%Y-%m-%d"
     _file_handler.setFormatter(logging.Formatter("%(message)s"))
@@ -128,14 +127,14 @@ if not _logger.handlers:
     _logger.addHandler(_console_handler)
 
 
-def log(message):
+def log(message: str) -> None:
     timestamp = time.strftime("%H:%M:%S")
     formatted_msg = f"[{timestamp}] {message}"
     _logger.info(formatted_msg)
     sys.stdout.flush()
 
 
-def log_separator():
+def log_separator() -> None:
     _logger.info("")
     _logger.info("=" * 72)
     sys.stdout.flush()

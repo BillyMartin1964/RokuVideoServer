@@ -5,6 +5,8 @@ from pathlib import Path
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from models.directory_model import DirectoryModel
+
 # ============================================================================
 # DIRECTORY FILTERING
 # ============================================================================
@@ -32,8 +34,7 @@ IGNORED_DIRECTORY_NAMES = {
 
 
 def _should_ignore_directory(directory_name: str) -> bool:
-    """
-    Determine whether a physical directory should be hidden from Roku.
+    """Determine whether a physical directory should be hidden from Roku.
 
     Any directory beginning with "." is considered hidden.
 
@@ -61,8 +62,7 @@ def _should_ignore_directory(directory_name: str) -> bool:
 
 
 def _normalize_path(path: str) -> str:
-    """
-    Normalize a directory path so comparisons are consistent.
+    """Normalize a directory path so comparisons are consistent.
 
     Examples:
         "/Movies/" -> "/Movies"
@@ -87,8 +87,7 @@ def _normalize_path(path: str) -> str:
 
 
 def _get_drive_path(drive_name: str) -> Path:
-    """
-    Return the physical filesystem path for a drive.
+    """Return the physical filesystem path for a drive.
 
     Example:
         "Vids2" -> /Volumes/Vids2
@@ -101,8 +100,7 @@ def _get_directory_path(
     drive_name: str,
     directory: str,
 ) -> Path:
-    """
-    Return the physical filesystem path for a directory on a drive.
+    """Return the physical filesystem path for a directory on a drive.
 
     Example:
         drive_name = "Vids2"
@@ -124,8 +122,7 @@ def _get_directory_path(
 
 
 def _get_directory_path_parts(directory_path: str) -> list[str]:
-    """
-    Return the directory hierarchy as a list of path components.
+    """Return the directory hierarchy as a list of path components.
 
     Examples:
 
@@ -161,60 +158,18 @@ def _create_directory_item(
     drive_name: str,
     directory_path: str,
 ) -> dict:
-    """
-    Create the directory response object used by the Roku application.
+    """Create the directory response object using DirectoryModel.
 
-    directory_path is relative to the drive and always begins with "/".
-
-    Example:
-
-        drive_name = "Vids2"
-        directory_path = "/Movies/Action/2025"
-
-    Produces an item representing:
-
-        /Volumes/Vids2/Movies/Action/2025
-
-    The complete directory hierarchy is preserved in:
-
-        path
-        depth
-        parent
+    Instantiating DirectoryModel guarantees both 'directory' and 'subfolder'
+    are populated alongside standard fields (isFolder, depth, parent, path).
     """
 
     normalized_directory = _normalize_path(directory_path)
-
-    title = (
-        normalized_directory.rsplit("/", 1)[-1] if normalized_directory else drive_name
+    model = DirectoryModel.create(
+        drive=drive_name,
+        directory=normalized_directory,
     )
-
-    dir_key = f"{drive_name}|{normalized_directory}"
-
-    if normalized_directory:
-        display_name = f"{drive_name} / {normalized_directory.lstrip('/')}"
-    else:
-        display_name = drive_name
-
-    path_parts = _get_directory_path_parts(normalized_directory)
-
-    depth = len(path_parts)
-
-    if len(path_parts) > 1:
-        parent = path_parts[-2]
-    else:
-        parent = ""
-
-    return {
-        "drive": drive_name,
-        "subfolder": normalized_directory,
-        "dirKey": dir_key,
-        "thumbUrl": "",
-        "name": display_name,
-        "title": title,
-        "path": path_parts,
-        "depth": depth,
-        "parent": parent,
-    }
+    return model.model_dump()
 
 
 # ============================================================================
@@ -226,10 +181,7 @@ def _get_immediate_child_directories(
     drive_name: str,
     parent_directory: str,
 ) -> list:
-    """
-    Return only the immediate physical child directories beneath
-    the selected directory.
-    """
+    """Return only the immediate physical child directories beneath the selected directory."""
 
     target_path = _get_directory_path(
         drive_name,
@@ -273,7 +225,7 @@ def _get_immediate_child_directories(
 
     return sorted(
         children,
-        key=lambda item: item["title"].lower(),
+        key=lambda item: item.get("title", "").lower(),
     )
 
 
@@ -283,8 +235,7 @@ def _get_immediate_child_directories(
 
 
 def handle_get_all_directories(request: Request):
-    """
-    Return the immediate top-level directories for all mounted drives.
+    """Return the immediate top-level directories for all mounted drives.
 
     Directory information comes directly from the physical filesystem.
     """
@@ -347,9 +298,7 @@ def handle_get_directories_by_drive(
     request: Request,
     drive_name: str,
 ):
-    """
-    Return only the immediate physical child directories of a drive.
-    """
+    """Return only the immediate physical child directories of a drive."""
 
     del request
 
@@ -402,10 +351,7 @@ def handle_get_subdirectories(
     drive_name: str,
     directory: str,
 ):
-    """
-    Return only the immediate physical subdirectories of a selected
-    directory.
-    """
+    """Return only the immediate physical subdirectories of a selected directory."""
 
     del request
 
@@ -465,9 +411,9 @@ def handle_get_child_directories(
     drive_name: str,
     parent_directory: str,
 ):
-    """
-    Return only the immediate physical child directories beneath
-    the selected directory. Retained as a compatibility endpoint.
+    """Return only the immediate physical child directories beneath the selected directory.
+
+    Retained as a compatibility endpoint.
     """
 
     return handle_get_subdirectories(

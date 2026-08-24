@@ -1,9 +1,22 @@
 from pydantic import BaseModel, Field
 
 
-class VideoModel(BaseModel):
+def normalize_directory_path(path: str) -> str:
+    """Normalizes a directory string to standard format: leading slash, no trailing slash.
+
+    Examples:
+        "" or "/"           -> ""
+        "Fav" or "/Fav/"    -> "/Fav"
+        "/Fav/AndiJames/"   -> "/Fav/AndiJames"
     """
-    Complete data model representing a video in the media catalog.
+    if not path:
+        return ""
+    cleaned = f"/{path.strip('/')}"
+    return "" if cleaned == "/" else cleaned
+
+
+class VideoModel(BaseModel):
+    """Complete data model representing a video in the media catalog.
 
     This model contains metadata and URLs describing the video.
 
@@ -81,8 +94,7 @@ def create_video_model(
     data: dict,
     base_url: str = "",
 ) -> VideoModel:
-    """
-    Convert catalog data into a complete VideoModel.
+    """Convert catalog data into a complete VideoModel.
 
     The input may come from:
         - the video catalog
@@ -164,10 +176,11 @@ def create_video_model(
     drive = str(data.get("drive") or "")
 
     # ------------------------------------------------------------------------
-    # Directory
+    # Directory (Standardized and normalized path)
     # ------------------------------------------------------------------------
 
-    directory = str(data.get("directory") or data.get("subfolder") or "")
+    raw_directory = str(data.get("directory") or data.get("subfolder") or "")
+    directory = normalize_directory_path(raw_directory)
 
     # ------------------------------------------------------------------------
     # Description
