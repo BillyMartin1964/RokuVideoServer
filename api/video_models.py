@@ -5,10 +5,14 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse
 
 import config
-from config import CACHE_LOCK, log
+from config import CACHE_LOCK, log, log_separator
 from models.video_model import create_video_model
 from services.video_model_service import generate_thumbnail
-from services.video_service import get_file_id, save_disk_cache
+from services.video_service import (
+    ensure_directory_indexed,
+    get_file_id,
+    save_disk_cache,
+)
 
 
 def _get_base_url(request: Request) -> str:
@@ -94,44 +98,21 @@ def _model_to_dict(item: dict, base_url: str) -> dict:
     return model.model_dump()
 
 
-def handle_get_video_models(
-    request: Request,
-    drive: str | None = None,
-    directory: str | None = None,
-    offset: int = 0,
-    limit: int = 60,
+def _get_matching_video_items(
+    drive: str | None,
+    directory: str | None,
 ):
     """
-    Return VideoModels for videos matching the requested filters.
+    Return catalog items matching the requested drive and directory.
 
-    Optional filters:
-        drive:
-            Physical drive name.
-
-        directory:
-            Directory or subfolder containing the videos.
-
-        offset:
-            Number of matching videos to skip.
-
-        limit:
-            Maximum number of videos to return.
-            0 means return all remaining videos.
-
-    The response contains VideoModel JSON objects.
-    It does not contain video bytes.
+    This function only examines the existing catalog. It does not
+    perform a filesystem scan.
     """
-
-    offset = max(0, offset)
-    limit = max(0, min(limit, 500))
-
     normalized_drive = _normalize_drive(drive)
 
     normalized_directory = (
         _normalize_directory(directory) if directory is not None else None
     )
-
-    base_url = _get_base_url(request)
 
     with CACHE_LOCK:
         matching = []
@@ -159,12 +140,99 @@ def handle_get_video_models(
 
             matching.append(item)
 
-        total_count = len(matching)
+        return matching
 
-        if limit == 0:
-            raw_chunk = matching[offset:]
+
+def handle_get_video_models(
+    request: Request,
+    drive: str | None = None,
+    directory: str | None = None,
+    offset: int = 0,
+    limit: int = 60,
+):
+    """
+    Return VideoModels for videos matching the requested filters.
+
+    Optional filters:
+        drive:
+            Physical drive name.
+
+        directory:
+            Directory or subfolder containing the videos.
+
+        offset:
+            Number of matching videos to skip.
+
+        limit:
+            Maximum number of videos to return.
+            0 means return all remaining videos.
+
+    If a specific drive and directory are requested and the existing
+    catalog contains no matching videos, a targeted filesystem scan
+    is performed for that directory. Any discovered videos are added
+    to the catalog and the query is then performed again.
+
+    The response contains VideoModel JSON objects.
+    It does not contain video bytes.
+    """
+    offset = max(0, offset)
+    limit = max(0, min(limit, 500))
+
+    normalized_drive = _normalize_drive(drive)
+
+    normalized_directory = (
+        _normalize_directory(directory) if directory is not None else None
+    )
+
+    base_url = _get_base_url(request)
+
+    matching = _get_matching_video_items(
+        normalized_drive,
+        normalized_directory,
+    )
+
+    # ------------------------------------------------------------
+    # TARGETED DIRECTORY REINDEX
+    #
+    # If the catalog contains no videos for a specific drive
+    # directory, physically scan that directory before returning
+    # zero results.
+    #
+    # We intentionally require BOTH drive and directory so that a
+    # normal query without filters cannot accidentally trigger a
+    # large filesystem scan.
+    # ------------------------------------------------------------
+
+    if len(matching) == 0 and normalized_drive and normalized_directory is not None:
+        log_separator()
+        log("VIDEO MODEL REQUEST FOUND NO INDEXED VIDEOS")
+        log(
+            f"--> Requesting targeted reindex: "
+            f"drive=[{normalized_drive}] "
+            f"directory=[{normalized_directory}]"
+        )
+
+        reindexed = ensure_directory_indexed(
+            normalized_drive,
+            normalized_directory,
+        )
+
+        if reindexed:
+            log("--> Targeted reindex discovered videos. Refreshing catalog query.")
+
+            matching = _get_matching_video_items(
+                normalized_drive,
+                normalized_directory,
+            )
         else:
-            raw_chunk = matching[offset : offset + limit]
+            log("--> Targeted reindex found no videos. Returning empty result.")
+
+    total_count = len(matching)
+
+    if limit == 0:
+        raw_chunk = matching[offset:]
+    else:
+        raw_chunk = matching[offset : offset + limit]
 
     formatted_chunk = [
         _model_to_dict(
