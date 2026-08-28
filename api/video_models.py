@@ -78,6 +78,53 @@ def _normalize_directory(value) -> str:
     return normalized
 
 
+def _get_item_file_name(item: dict) -> str:
+    """
+    Return the filename represented by a catalog item.
+
+    This follows the same filename construction rules used by
+    create_video_model() without constructing a complete VideoModel.
+
+    Priority:
+        1. Explicit fileName
+        2. name + ext
+        3. name
+        4. Filename extracted from path/fullPath
+    """
+    if not isinstance(item, dict):
+        return ""
+
+    supplied_file_name = str(item.get("fileName") or "").strip()
+
+    if supplied_file_name:
+        return supplied_file_name
+
+    raw_name = str(item.get("name") or "").strip()
+
+    raw_ext = str(
+        item.get("ext")
+        or item.get("extension")
+        or ""
+    ).strip()
+
+    if raw_ext and not raw_ext.startswith("."):
+        raw_ext = "." + raw_ext
+
+    if raw_name:
+        return f"{raw_name}{raw_ext}" if raw_ext else raw_name
+
+    raw_path = str(
+        item.get("path")
+        or item.get("fullPath")
+        or ""
+    ).strip()
+
+    if raw_path:
+        return os.path.basename(raw_path)
+
+    return ""
+
+
 def _model_to_dict(item: dict, base_url: str) -> dict:
     """
     Convert a catalog item into the standard VideoModel dictionary.
@@ -128,9 +175,13 @@ def _get_matching_video_items(
                     continue
 
             if normalized_directory is not None:
-                item_directory = _normalize_directory(item.get("directory", ""))
+                item_directory = _normalize_directory(
+                    item.get("directory", "")
+                )
 
-                item_subfolder = _normalize_directory(item.get("subfolder", ""))
+                item_subfolder = _normalize_directory(
+                    item.get("subfolder", "")
+                )
 
                 if (
                     item_directory != normalized_directory
@@ -141,6 +192,47 @@ def _get_matching_video_items(
             matching.append(item)
 
         return matching
+
+
+def _get_matching_video_items_by_file_name(
+    file_name: str,
+    drive: str | None = None,
+    directory: str | None = None,
+):
+    """
+    Return catalog items whose filenames contain the supplied
+    search text.
+
+    Matching is case-insensitive substring matching.
+
+    Optional drive and directory filters are applied before the
+    filename comparison.
+
+    This function only examines the existing catalog. It does not
+    perform a filesystem scan.
+    """
+    search_text = str(file_name or "").strip().casefold()
+
+    if not search_text:
+        return []
+
+    candidate_items = _get_matching_video_items(
+        drive,
+        directory,
+    )
+
+    matching = []
+
+    for item in candidate_items:
+        item_file_name = _get_item_file_name(item)
+
+        if not item_file_name:
+            continue
+
+        if search_text in item_file_name.casefold():
+            matching.append(item)
+
+    return matching
 
 
 def handle_get_video_models(
@@ -248,6 +340,114 @@ def handle_get_video_models(
     return JSONResponse(
         {
             "success": True,
+            "total": total_count,
+            "offset": offset,
+            "limit": limit,
+            "hasMore": has_more,
+            "nextOffset": next_offset,
+            "data": formatted_chunk,
+        }
+    )
+
+
+def handle_search_video_models(
+    request: Request,
+    file_name: str,
+    drive: str | None = None,
+    directory: str | None = None,
+    offset: int = 0,
+    limit: int = 0,
+):
+    """
+    Search for videos whose filenames contain the supplied text.
+
+    The search is case-insensitive and uses substring matching.
+
+    Examples:
+
+        star
+            Matches:
+                Star Wars.mp4
+                Star Trek.mp4
+                My Star Video.mkv
+
+        STAR
+            Produces the same matches as "star".
+
+    Optional filters:
+        drive:
+            Restrict the search to one drive.
+
+        directory:
+            Restrict the search to one directory or subfolder.
+
+        offset:
+            Number of matching videos to skip.
+
+        limit:
+            Maximum number of matching VideoModels to return.
+            0 means return all matching videos.
+
+    The returned objects are complete VideoModel JSON objects.
+    """
+    search_text = str(file_name or "").strip()
+
+    if not search_text:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Filename search text cannot be empty.",
+        )
+
+    offset = max(0, offset)
+    limit = max(0, min(limit, 500))
+
+    normalized_drive = _normalize_drive(drive)
+
+    normalized_directory = (
+        _normalize_directory(directory)
+        if directory is not None
+        else None
+    )
+
+    base_url = _get_base_url(request)
+
+    matching = _get_matching_video_items_by_file_name(
+        search_text,
+        normalized_drive,
+        normalized_directory,
+    )
+
+    total_count = len(matching)
+
+    if limit == 0:
+        raw_chunk = matching[offset:]
+    else:
+        raw_chunk = matching[offset : offset + limit]
+
+    formatted_chunk = [
+        _model_to_dict(
+            item,
+            base_url,
+        )
+        for item in raw_chunk
+    ]
+
+    next_offset = offset + len(formatted_chunk)
+    has_more = next_offset < total_count
+
+    log(
+        f"VIDEO MODEL FILENAME SEARCH: "
+        f"search=[{search_text}] "
+        f"drive=[{normalized_drive}] "
+        f"directory=[{normalized_directory}] "
+        f"matches=[{total_count}] "
+        f"returned=[{len(formatted_chunk)}]"
+    )
+
+    return JSONResponse(
+        {
+            "success": True,
+            "search": search_text,
             "total": total_count,
             "offset": offset,
             "limit": limit,
@@ -416,7 +616,9 @@ def handle_move_video(
     if os.path.exists(dest_path):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=("A video with that name already exists in the target directory."),
+            detail=(
+                "A video with that name already exists in the target directory."
+            ),
         )
 
     try:
@@ -440,14 +642,20 @@ def handle_move_video(
     volume_prefix = f"/Volumes/{drive_name}"
 
     if drive_name and target_directory.startswith(volume_prefix):
-        relative_directory = target_directory[len(volume_prefix) :].replace("\\", "/")
+        relative_directory = target_directory[
+            len(volume_prefix):
+        ].replace("\\", "/")
 
         if not relative_directory:
             relative_directory = "/"
         elif not relative_directory.startswith("/"):
             relative_directory = "/" + relative_directory
     else:
-        relative_directory = item.get("subfolder") or item.get("directory") or ""
+        relative_directory = (
+            item.get("subfolder")
+            or item.get("directory")
+            or ""
+        )
 
     updated_item = dict(item)
 
@@ -497,7 +705,11 @@ def handle_rename_video(
     """
     file_id = body.get("file_id") or body.get("id")
 
-    new_name = (body.get("new_name") or body.get("newName") or "").strip()
+    new_name = (
+        body.get("new_name")
+        or body.get("newName")
+        or ""
+    ).strip()
 
     if not file_id or not new_name:
         raise HTTPException(
@@ -644,7 +856,7 @@ def handle_delete_video(
             return JSONResponse(
                 {
                     "success": False,
-                    "error": ("Permission denied when deleting video."),
+                    "error": "Permission denied when deleting video.",
                 },
                 status_code=status.HTTP_403_FORBIDDEN,
             )
@@ -655,7 +867,9 @@ def handle_delete_video(
             return JSONResponse(
                 {
                     "success": False,
-                    "error": (f"Unable to delete video: {type(ex).__name__}: {ex}"),
+                    "error": (
+                        f"Unable to delete video: {type(ex).__name__}: {ex}"
+                    ),
                 },
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

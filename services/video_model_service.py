@@ -25,6 +25,7 @@ def thumbnail_cache_path(file_path):
 def create_default_poster_with_ffmpeg():
     if not ffmpeg_service.FFMPEG_PATH:
         return False
+
     try:
         cmd = [
             ffmpeg_service.FFMPEG_PATH,
@@ -42,20 +43,30 @@ def create_default_poster_with_ffmpeg():
             "2",
             DEFAULT_POSTER_FILE,
         ]
+
         result = subprocess.run(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
+
         return (
             result.returncode == 0
             and os.path.exists(DEFAULT_POSTER_FILE)
             and os.path.getsize(DEFAULT_POSTER_FILE) > 0
         )
-    except Exception as ex:
-        log(f"<!> FFmpeg default poster creation failed: {type(ex).__name__}: {ex}")
+
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        TimeoutError,
+    ) as ex:
+        log(
+            f"<!> FFmpeg default poster creation failed: "
+            f"{type(ex).__name__}: {ex}"
+        )
         return False
 
 
@@ -63,12 +74,21 @@ def create_default_poster_with_sips():
     if os.path.exists(DEFAULT_POSTER_FILE):
         return True
 
-    temp_ppm = os.path.join(THUMB_CACHE_DIR, "_default_poster_source.ppm")
+    temp_ppm = os.path.join(
+        THUMB_CACHE_DIR,
+        "_default_poster_source.ppm",
+    )
+
     try:
         rgb = bytes([48, 52, 59])
+
         with open(temp_ppm, "wb") as f:
-            f.write(f"P6\n{THUMB_WIDTH} {THUMB_HEIGHT}\n255\n".encode("ascii"))
-            f.write(rgb * (THUMB_WIDTH * THUMB_HEIGHT))
+            f.write(
+                f"P6\n{THUMB_WIDTH} {THUMB_HEIGHT}\n255\n".encode("ascii")
+            )
+            f.write(
+                rgb * (THUMB_WIDTH * THUMB_HEIGHT)
+            )
 
         result = subprocess.run(
             [
@@ -80,19 +100,29 @@ def create_default_poster_with_sips():
                 "--out",
                 DEFAULT_POSTER_FILE,
             ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=10,
+            check=False,
         )
+
         return (
             result.returncode == 0
             and os.path.exists(DEFAULT_POSTER_FILE)
             and os.path.getsize(DEFAULT_POSTER_FILE) > 0
         )
-    except Exception as ex:
-        log(f"<!> SIPS default poster creation failed: {type(ex).__name__}: {ex}")
+
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        TimeoutError,
+    ) as ex:
+        log(
+            f"<!> SIPS default poster creation failed: "
+            f"{type(ex).__name__}: {ex}"
+        )
         return False
+
     finally:
         if os.path.exists(temp_ppm):
             try:
@@ -102,7 +132,10 @@ def create_default_poster_with_sips():
 
 
 def ensure_default_poster():
-    if os.path.exists(DEFAULT_POSTER_FILE) and os.path.getsize(DEFAULT_POSTER_FILE) > 0:
+    if (
+        os.path.exists(DEFAULT_POSTER_FILE)
+        and os.path.getsize(DEFAULT_POSTER_FILE) > 0
+    ):
         return True
 
     if create_default_poster_with_ffmpeg():
@@ -111,12 +144,17 @@ def ensure_default_poster():
     return create_default_poster_with_sips()
 
 
-def run_ffmpeg_thumbnail(file_path, thumb_path, seek_seconds):
+def run_ffmpeg_thumbnail(
+    file_path,
+    thumb_path,
+    seek_seconds,
+):
     if not ffmpeg_service.FFMPEG_PATH:
         return False
 
     pad_filter = (
-        f"scale={THUMB_WIDTH}:{THUMB_HEIGHT}:force_original_aspect_ratio=decrease,"
+        f"scale={THUMB_WIDTH}:{THUMB_HEIGHT}:"
+        "force_original_aspect_ratio=decrease,"
         f"pad={THUMB_WIDTH}:{THUMB_HEIGHT}:(ow-iw)/2:(oh-ih)/2"
     )
 
@@ -142,27 +180,49 @@ def run_ffmpeg_thumbnail(file_path, thumb_path, seek_seconds):
     try:
         result = subprocess.run(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=THUMBNAIL_TIMEOUT_SECONDS,
+            check=False,
         )
+
         return (
             result.returncode == 0
             and os.path.exists(thumb_path)
             and os.path.getsize(thumb_path) > 0
         )
-    except Exception as ex:
+
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        TimeoutError,
+    ) as ex:
         log(
-            f"<!> FFmpeg thumbnail extraction failed for {os.path.basename(file_path)}: "
+            f"<!> FFmpeg thumbnail extraction failed for "
+            f"{os.path.basename(file_path)}: "
             f"{type(ex).__name__}: {ex}"
         )
         return False
 
 
-def run_quicklook_thumbnail(file_path, thumb_path):
-    # Isolated temp directory per thread/process prevents collision during parallel catalog generation
-    temp_dir = tempfile.mkdtemp(dir=THUMB_CACHE_DIR)
+def run_quicklook_thumbnail(
+    file_path,
+    thumb_path,
+):
+    # Isolated temp directory per thread/process prevents
+    # collision during parallel catalog generation.
+    try:
+        temp_dir = tempfile.mkdtemp(
+            dir=THUMB_CACHE_DIR
+        )
+    except OSError as ex:
+        log(
+            f"<!> QuickLook temporary directory creation failed for "
+            f"{os.path.basename(file_path)}: "
+            f"{type(ex).__name__}: {ex}"
+        )
+        return False
+
     try:
         cmd = [
             "/usr/bin/qlmanage",
@@ -173,20 +233,33 @@ def run_quicklook_thumbnail(file_path, thumb_path):
             temp_dir,
             file_path,
         ]
+
         subprocess.run(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=THUMBNAIL_TIMEOUT_SECONDS,
+            check=False,
         )
 
-        generated_pngs = [f for f in os.listdir(temp_dir) if f.lower().endswith(".png")]
+        generated_pngs = [
+            filename
+            for filename in os.listdir(temp_dir)
+            if filename.lower().endswith(".png")
+        ]
+
         if not generated_pngs:
             return False
 
-        source_thumbnail = os.path.join(temp_dir, generated_pngs[0])
-        if os.path.exists(source_thumbnail) and os.path.getsize(source_thumbnail) > 0:
+        source_thumbnail = os.path.join(
+            temp_dir,
+            generated_pngs[0],
+        )
+
+        if (
+            os.path.exists(source_thumbnail)
+            and os.path.getsize(source_thumbnail) > 0
+        ):
             convert_result = subprocess.run(
                 [
                     "/usr/bin/sips",
@@ -197,42 +270,72 @@ def run_quicklook_thumbnail(file_path, thumb_path):
                     "--out",
                     thumb_path,
                 ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
                 timeout=10,
+                check=False,
             )
+
             return (
                 convert_result.returncode == 0
                 and os.path.exists(thumb_path)
                 and os.path.getsize(thumb_path) > 0
             )
-    except Exception as ex:
+
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        TimeoutError,
+    ) as ex:
         log(
-            f"<!> QuickLook thumbnail failed for {os.path.basename(file_path)}: "
+            f"<!> QuickLook thumbnail failed for "
+            f"{os.path.basename(file_path)}: "
             f"{type(ex).__name__}: {ex}"
         )
+
     finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        shutil.rmtree(
+            temp_dir,
+            ignore_errors=True,
+        )
 
     return False
 
 
 def generate_thumbnail(file_path):
     thumb_path = thumbnail_cache_path(file_path)
-    if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
+
+    if (
+        os.path.exists(thumb_path)
+        and os.path.getsize(thumb_path) > 0
+    ):
         return thumb_path
 
     log_separator()
-    log(f"THUMBNAIL REQUEST: {os.path.basename(file_path)}")
+    log(
+        f"THUMBNAIL REQUEST: "
+        f"{os.path.basename(file_path)}"
+    )
 
     if ffmpeg_service.FFMPEG_PATH:
-        if run_ffmpeg_thumbnail(file_path, thumb_path, THUMBNAIL_SEEK_SECONDS):
-            return thumb_path
-        if run_ffmpeg_thumbnail(file_path, thumb_path, 0):
+        if run_ffmpeg_thumbnail(
+            file_path,
+            thumb_path,
+            THUMBNAIL_SEEK_SECONDS,
+        ):
             return thumb_path
 
-    if run_quicklook_thumbnail(file_path, thumb_path):
+        if run_ffmpeg_thumbnail(
+            file_path,
+            thumb_path,
+            0,
+        ):
+            return thumb_path
+
+    if run_quicklook_thumbnail(
+        file_path,
+        thumb_path,
+    ):
         return thumb_path
 
     if ensure_default_poster():

@@ -67,7 +67,12 @@ def get_local_ip():
 class SetAuthorizedDrivesRequest(BaseModel):
     authorized_drives: list[str] = Field(
         ...,
-        json_schema_extra={"example": ["/Volumes/MediaDrive", "/Volumes/External1"]},
+        json_schema_extra={
+            "example": [
+                "/Volumes/MediaDrive",
+                "/Volumes/External1",
+            ]
+        },
         description="List of drive mount points authorized for API access.",
     )
 
@@ -182,6 +187,7 @@ async def track_connected_clients(request: Request, call_next):
         CLIENT_ACTIVITY[client_ip] = time.time()
 
     response = await call_next(request)
+
     return response
 
 
@@ -203,8 +209,11 @@ def get_health(request: Request):
         active_clients = sum(
             1 for last_seen in CLIENT_ACTIVITY.values() if last_seen >= five_mins_ago
         )
+
         clients_24h = sum(
-            1 for last_seen in CLIENT_ACTIVITY.values() if last_seen >= twenty_four_hours_ago
+            1
+            for last_seen in CLIENT_ACTIVITY.values()
+            if last_seen >= twenty_four_hours_ago
         )
 
     if isinstance(base_response, dict):
@@ -212,9 +221,10 @@ def get_health(request: Request):
         base_response["clients24h"] = clients_24h
         base_response["start_time"] = START_TIME
 
-        # Ensure driveCount is present if omitted
         if "driveCount" not in base_response and "drive_count" not in base_response:
-            base_response["driveCount"] = len(config.FILE_MAP) if hasattr(config, "FILE_MAP") else 0
+            base_response["driveCount"] = (
+                len(config.FILE_MAP) if hasattr(config, "FILE_MAP") else 0
+            )
 
     return base_response
 
@@ -228,10 +238,15 @@ def get_connected_clients():
 
     with CLIENT_LOCK:
         active_ips = [
-            ip for ip, last_seen in CLIENT_ACTIVITY.items() if last_seen >= five_mins_ago
+            ip
+            for ip, last_seen in CLIENT_ACTIVITY.items()
+            if last_seen >= five_mins_ago
         ]
+
         recent_24h_ips = [
-            ip for ip, last_seen in CLIENT_ACTIVITY.items() if last_seen >= twenty_four_hours_ago
+            ip
+            for ip, last_seen in CLIENT_ACTIVITY.items()
+            if last_seen >= twenty_four_hours_ago
         ]
 
     return {
@@ -262,20 +277,28 @@ def set_authorized_drives(
         body.model_dump() if hasattr(body, "model_dump") else body.dict(),
     )
 
-@app.get("/api/drives", tags=["Hard Drives"])
+
+@app.get(
+    "/api/drives",
+    tags=["Hard Drives"],
+)
 def get_drives(
     request: Request,
     include_all: bool = Query(
         False,
         alias="all",
-        description="Set to true to return all drives with authorization status.",
+        description=("Set to true to return all drives with authorization status."),
     ),
 ):
     """
     Return available physical drives and volume metadata.
+
     Defaults to returning authorized drives only.
     """
-    return api_drives.handle_get_drives(request, include_all=include_all)
+    return api_drives.handle_get_drives(
+        request,
+        include_all=include_all,
+    )
 
 
 # ============================================================================
@@ -283,7 +306,10 @@ def get_drives(
 # ============================================================================
 
 
-@app.get("/api/directories", tags=["Directories"])
+@app.get(
+    "/api/directories",
+    tags=["Directories"],
+)
 def get_directories(
     request: Request,
     drive: str | None = Query(
@@ -331,7 +357,7 @@ def get_child_directories(
     drive: str,
     directory: str = Query(
         "",
-        description="Directory whose immediate child directories should be returned.",
+        description=("Directory whose immediate child directories should be returned."),
     ),
 ):
     """Return only the immediate child directories."""
@@ -381,9 +407,76 @@ def get_video_models(
 
     It does not return video file bytes.
     """
-
     return api_video_models.handle_get_video_models(
         request,
+        drive,
+        directory,
+        offset,
+        limit,
+    )
+
+
+# --------------------------------------------------------------------------
+# VIDEO MODEL FILENAME SEARCH
+#
+# This route MUST appear before /api/video-models/{file_id}.
+#
+# FastAPI evaluates path operations in declaration order, so the
+# fixed "search" segment must be registered before the generic
+# single-value path parameter.
+# --------------------------------------------------------------------------
+
+
+@app.get(
+    "/api/video-models/search/{fileName}",
+    tags=["Video Models"],
+)
+def search_video_models(
+    request: Request,
+    fileName: str,
+    drive: str | None = Query(
+        None,
+        description="Optional drive filter.",
+    ),
+    directory: str | None = Query(
+        None,
+        description="Optional directory/subfolder filter.",
+    ),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="Number of matching videos to skip.",
+    ),
+    limit: int = Query(
+        0,
+        ge=0,
+        le=500,
+        description=(
+            "Maximum number of matching VideoModels to return. Use 0 for all matches."
+        ),
+    ),
+):
+    """
+    Search video filenames.
+
+    The search is case-insensitive and performs substring matching
+    against VideoModel.fileName.
+
+    Example:
+
+        /api/video-models/search/star
+
+    matches filenames such as:
+
+        Star Wars.mp4
+        Star Trek.mp4
+        My Star Video.mkv
+
+    The response contains complete VideoModel JSON objects.
+    """
+    return api_video_models.handle_search_video_models(
+        request,
+        fileName,
         drive,
         directory,
         offset,
