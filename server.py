@@ -5,7 +5,7 @@ import socket
 import threading
 import time
 from contextlib import asynccontextmanager
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,7 +34,8 @@ CLIENT_LOCK = threading.Lock()
 START_TIME = time.time()
 
 
-def get_local_ip():
+def get_local_ip() -> str:
+    """Return the local IP address used by the server."""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.connect(("8.8.8.8", 80))
@@ -44,8 +45,8 @@ def get_local_ip():
         if ip:
             return ip
 
-    except OSError as e:
-        log(f"<!> Could not determine local IP via socket: {e}")
+    except OSError as ex:
+        log(f"<!> Could not determine local IP via socket: {ex}")
 
     try:
         hostname = socket.gethostname()
@@ -54,10 +55,34 @@ def get_local_ip():
         if ip and not ip.startswith("127."):
             return ip
 
-    except OSError as e:
-        log(f"<!> Could not determine local IP via hostname: {e}")
+    except OSError as ex:
+        log(f"<!> Could not determine local IP via hostname: {ex}")
 
     return "127.0.0.1"
+
+
+# ============================================================================
+# FastAPI Query Type Aliases
+# ============================================================================
+
+IncludeAllQuery = Annotated[
+    bool,
+    Query(
+        alias="all",
+        description="Set to true to return all drives with authorization status.",
+    ),
+]
+
+DrivesQuery = Annotated[
+    list[str] | None,
+    Query(
+        description=(
+            "Optional drive filter. "
+            "Repeat the parameter to specify multiple drives. "
+            "If omitted, all drives are searched."
+        ),
+    ),
+]
 
 
 # ============================================================================
@@ -285,11 +310,7 @@ def set_authorized_drives(
 )
 def get_drives(
     request: Request,
-    include_all: bool = Query(
-        False,
-        alias="all",
-        description=("Set to true to return all drives with authorization status."),
-    ),
+    include_all: IncludeAllQuery = False,
 ):
     """
     Return available physical drives and volume metadata.
@@ -380,10 +401,7 @@ def get_child_directories(
 )
 def get_video_models(
     request: Request,
-    drive: str | None = Query(
-        None,
-        description="Optional drive filter.",
-    ),
+    drives: DrivesQuery = None,
     directory: str | None = Query(
         None,
         description="Optional directory/subfolder filter.",
@@ -403,14 +421,24 @@ def get_video_models(
     """
     Return VideoModels.
 
-    This endpoint returns video metadata and URLs for the videos
-    matching the optional drive and directory filters.
+    The drives query parameter is optional and may be repeated.
 
-    It does not return video file bytes.
+    Examples:
+
+        No drives:
+            /api/video-models
+
+        One drive:
+            /api/video-models?drives=Vids
+
+        Multiple drives:
+            /api/video-models?drives=Vids&drives=Movies
+
+    If drives is omitted, all drives are searched.
     """
     return api_video_models.handle_get_video_models(
         request,
-        drive,
+        drives,
         directory,
         offset,
         limit,
@@ -452,10 +480,7 @@ def search_video_models(
             "the selected search field."
         ),
     ),
-    drive: str | None = Query(
-        None,
-        description="Optional drive filter.",
-    ),
+    drives: DrivesQuery = None,
     directory: str | None = Query(
         None,
         description="Optional directory/subfolder filter.",
@@ -497,6 +522,8 @@ def search_video_models(
     exclude_words optionally removes results containing any of
     the supplied exclusion words.
 
+    The drives parameter is optional and may be repeated.
+
     Examples:
 
         fileName=deer
@@ -533,7 +560,13 @@ def search_video_models(
 
             Excludes filenames/titles containing "bear".
 
-    Optional drive and directory filters can further restrict
+        drives=Vids&drives=Movies
+
+            Searches only Vids and Movies.
+
+    If drives is omitted, all drives are searched.
+
+    Optional directory filters can further restrict
     the search results.
 
     The response contains complete VideoModel JSON objects.
@@ -543,7 +576,7 @@ def search_video_models(
         file_name=fileName,
         search_field=search_field,
         exclude_words=exclude_words,
-        drive=drive,
+        drives=drives,
         directory=directory,
         offset=offset,
         limit=limit,

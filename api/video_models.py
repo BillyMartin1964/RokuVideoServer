@@ -53,6 +53,33 @@ def _normalize_drive(value) -> str:
     return str(value).strip().strip("/")
 
 
+def _normalize_drives(drives: list[str] | None) -> list[str]:
+    """
+    Normalize a list of drive names.
+
+    An empty or None value means no drive filter, which means all
+    drives should be searched.
+
+    Empty drive names are removed and duplicate drive names are
+    removed while preserving the original order.
+    """
+    if not drives:
+        return []
+
+    normalized: list[str] = []
+
+    for drive in drives:
+        normalized_drive = _normalize_drive(drive)
+
+        if not normalized_drive:
+            continue
+
+        if normalized_drive not in normalized:
+            normalized.append(normalized_drive)
+
+    return normalized
+
+
 def _normalize_directory(value) -> str:
     """
     Normalize a directory path for comparison.
@@ -138,16 +165,27 @@ def _model_to_dict(item: dict, base_url: str) -> dict:
 
 
 def _get_matching_video_items(
-    drive: str | None,
+    drives: list[str] | None,
     directory: str | None,
 ):
     """
-    Return catalog items matching the requested drive and directory.
+    Return catalog items matching the requested drives and directory.
+
+    drives:
+        None or an empty list means all drives.
+
+        A non-empty list restricts results to the specified drives.
+
+    directory:
+        None means all directories.
+
+        A supplied directory restricts results to that directory
+        or matching subfolder.
 
     This function only examines the existing catalog. It does not
     perform a filesystem scan.
     """
-    normalized_drive = _normalize_drive(drive)
+    normalized_drives = _normalize_drives(drives)
 
     normalized_directory = (
         _normalize_directory(directory) if directory is not None else None
@@ -160,16 +198,20 @@ def _get_matching_video_items(
             if not isinstance(item, dict):
                 continue
 
-            if normalized_drive:
+            if normalized_drives:
                 item_drive = _normalize_drive(item.get("drive", ""))
 
-                if item_drive != normalized_drive:
+                if item_drive not in normalized_drives:
                     continue
 
             if normalized_directory is not None:
-                item_directory = _normalize_directory(item.get("directory", ""))
+                item_directory = _normalize_directory(
+                    item.get("directory", "")
+                )
 
-                item_subfolder = _normalize_directory(item.get("subfolder", ""))
+                item_subfolder = _normalize_directory(
+                    item.get("subfolder", "")
+                )
 
                 if (
                     item_directory != normalized_directory
@@ -184,7 +226,7 @@ def _get_matching_video_items(
 
 def _get_matching_video_items_by_file_name(
     file_name: str,
-    drive: str | None = None,
+    drives: list[str] | None = None,
     directory: str | None = None,
 ):
     """
@@ -196,6 +238,8 @@ def _get_matching_video_items_by_file_name(
     Optional drive and directory filters are applied before the
     filename comparison.
 
+    A None or empty drives list means all drives.
+
     This function only examines the existing catalog. It does not
     perform a filesystem scan.
     """
@@ -205,7 +249,7 @@ def _get_matching_video_items_by_file_name(
         return []
 
     candidate_items = _get_matching_video_items(
-        drive,
+        drives,
         directory,
     )
 
@@ -225,7 +269,7 @@ def _get_matching_video_items_by_file_name(
 
 def handle_get_video_models(
     request: Request,
-    drive: str | None = None,
+    drives: list[str] | None = None,
     directory: str | None = None,
     offset: int = 0,
     limit: int = 60,
@@ -234,8 +278,10 @@ def handle_get_video_models(
     Return VideoModels for videos matching the requested filters.
 
     Optional filters:
-        drive:
-            Physical drive name.
+        drives:
+            List of physical drive names.
+
+            None or an empty list means all drives.
 
         directory:
             Directory or subfolder containing the videos.
@@ -247,10 +293,9 @@ def handle_get_video_models(
             Maximum number of videos to return.
             0 means return all remaining videos.
 
-    If a specific drive and directory are requested and the existing
+    If specific drives and a directory are requested and the existing
     catalog contains no matching videos, a targeted filesystem scan
-    is performed for that directory. Any discovered videos are added
-    to the catalog and the query is then performed again.
+    is performed for that directory on each requested drive.
 
     The response contains VideoModel JSON objects.
     It does not contain video bytes.
@@ -258,7 +303,7 @@ def handle_get_video_models(
     offset = max(0, offset)
     limit = max(0, min(limit, 500))
 
-    normalized_drive = _normalize_drive(drive)
+    normalized_drives = _normalize_drives(drives)
 
     normalized_directory = (
         _normalize_directory(directory) if directory is not None else None
@@ -267,45 +312,71 @@ def handle_get_video_models(
     base_url = _get_base_url(request)
 
     matching = _get_matching_video_items(
-        normalized_drive,
+        normalized_drives,
         normalized_directory,
     )
 
     # ------------------------------------------------------------
     # TARGETED DIRECTORY REINDEX
     #
-    # If the catalog contains no videos for a specific drive
-    # directory, physically scan that directory before returning
-    # zero results.
+    # If the catalog contains no videos for specific drives and a
+    # specific directory, physically scan that directory on each
+    # requested drive before returning zero results.
     #
-    # We intentionally require BOTH drive and directory so that a
-    # normal query without filters cannot accidentally trigger a
-    # large filesystem scan.
+    # We intentionally require BOTH:
+    #
+    #     1. At least one specific drive
+    #     2. A specific directory
+    #
+    # This prevents a normal all-drives query from accidentally
+    # triggering a large filesystem scan.
     # ------------------------------------------------------------
 
-    if len(matching) == 0 and normalized_drive and normalized_directory is not None:
+    if (
+        len(matching) == 0
+        and normalized_drives
+        and normalized_directory is not None
+    ):
         log_separator()
         log("VIDEO MODEL REQUEST FOUND NO INDEXED VIDEOS")
         log(
             f"--> Requesting targeted reindex: "
-            f"drive=[{normalized_drive}] "
+            f"drives=[{', '.join(normalized_drives)}] "
             f"directory=[{normalized_directory}]"
         )
 
-        reindexed = ensure_directory_indexed(
-            normalized_drive,
-            normalized_directory,
-        )
+        reindexed_any = False
 
-        if reindexed:
-            log("--> Targeted reindex discovered videos. Refreshing catalog query.")
+        for drive in normalized_drives:
+            log(
+                f"--> Targeted reindex: "
+                f"drive=[{drive}] "
+                f"directory=[{normalized_directory}]"
+            )
+
+            reindexed = ensure_directory_indexed(
+                drive,
+                normalized_directory,
+            )
+
+            if reindexed:
+                reindexed_any = True
+
+        if reindexed_any:
+            log(
+                "--> Targeted reindex discovered videos. "
+                "Refreshing catalog query."
+            )
 
             matching = _get_matching_video_items(
-                normalized_drive,
+                normalized_drives,
                 normalized_directory,
             )
         else:
-            log("--> Targeted reindex found no videos. Returning empty result.")
+            log(
+                "--> Targeted reindex found no videos on the "
+                "requested drives. Returning empty result."
+            )
 
     total_count = len(matching)
 
@@ -343,13 +414,24 @@ def handle_search_video_models(
     file_name: str,
     search_field: str = "fileName",
     exclude_words: str | None = None,
-    drive: str | None = None,
+    drives: list[str] | None = None,
     directory: str | None = None,
     offset: int = 0,
     limit: int = 0,
 ):
     """
-    Search for videos whose filenames or titles contain the supplied text.
+    Search for videos whose filenames contain the supplied text.
+
+    drives:
+        None or an empty list means search all drives.
+
+        A non-empty list restricts the search to those drives.
+
+    directory:
+        None means search all directories.
+
+        A supplied directory restricts the search to that directory
+        or matching subfolder.
     """
     search_text = str(file_name or "").strip()
 
@@ -362,7 +444,7 @@ def handle_search_video_models(
     offset = max(0, offset)
     limit = max(0, min(limit, 500))
 
-    normalized_drive = _normalize_drive(drive)
+    normalized_drives = _normalize_drives(drives)
 
     normalized_directory = (
         _normalize_directory(directory) if directory is not None else None
@@ -370,26 +452,39 @@ def handle_search_video_models(
 
     base_url = _get_base_url(request)
 
-    # Get matching items by filename
+    # ------------------------------------------------------------
+    # GET MATCHING ITEMS BY FILENAME
+    # ------------------------------------------------------------
+
     matching = _get_matching_video_items_by_file_name(
         search_text,
-        normalized_drive,
+        normalized_drives,
         normalized_directory,
     )
 
-    # Filter out excluded words if provided
+    # ------------------------------------------------------------
+    # FILTER OUT EXCLUDED WORDS
+    # ------------------------------------------------------------
+
     if exclude_words:
         exclusions = [
-            w.strip().casefold()
-            for w in exclude_words.replace(",", " ").split()
-            if w.strip()
+            word.strip().casefold()
+            for word in exclude_words.replace(",", " ").split()
+            if word.strip()
         ]
+
         if exclusions:
             filtered_matching = []
+
             for item in matching:
                 item_name = _get_item_file_name(item).casefold()
-                if not any(exc in item_name for exc in exclusions):
+
+                if not any(
+                    exclusion in item_name
+                    for exclusion in exclusions
+                ):
                     filtered_matching.append(item)
+
             matching = filtered_matching
 
     total_count = len(matching)
@@ -410,10 +505,16 @@ def handle_search_video_models(
     next_offset = offset + len(formatted_chunk)
     has_more = next_offset < total_count
 
+    drive_log_value = (
+        ", ".join(normalized_drives)
+        if normalized_drives
+        else "ALL"
+    )
+
     log(
         f"VIDEO MODEL FILENAME SEARCH: "
         f"search=[{search_text}] "
-        f"drive=[{normalized_drive}] "
+        f"drives=[{drive_log_value}] "
         f"directory=[{normalized_directory}] "
         f"matches=[{total_count}] "
         f"returned=[{len(formatted_chunk)}]"
@@ -423,6 +524,7 @@ def handle_search_video_models(
         {
             "success": True,
             "search": search_text,
+            "drives": normalized_drives,
             "total": total_count,
             "offset": offset,
             "limit": limit,
@@ -591,7 +693,10 @@ def handle_move_video(
     if os.path.exists(dest_path):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=("A video with that name already exists in the target directory."),
+            detail=(
+                "A video with that name already exists "
+                "in the target directory."
+            ),
         )
 
     try:
@@ -615,14 +720,20 @@ def handle_move_video(
     volume_prefix = f"/Volumes/{drive_name}"
 
     if drive_name and target_directory.startswith(volume_prefix):
-        relative_directory = target_directory[len(volume_prefix) :].replace("\\", "/")
+        relative_directory = target_directory[
+            len(volume_prefix):
+        ].replace("\\", "/")
 
         if not relative_directory:
             relative_directory = "/"
         elif not relative_directory.startswith("/"):
             relative_directory = "/" + relative_directory
     else:
-        relative_directory = item.get("subfolder") or item.get("directory") or ""
+        relative_directory = (
+            item.get("subfolder")
+            or item.get("directory")
+            or ""
+        )
 
     updated_item = dict(item)
 
@@ -672,7 +783,11 @@ def handle_rename_video(
     """
     file_id = body.get("file_id") or body.get("id")
 
-    new_name = (body.get("new_name") or body.get("newName") or "").strip()
+    new_name = (
+        body.get("new_name")
+        or body.get("newName")
+        or ""
+    ).strip()
 
     if not file_id or not new_name:
         raise HTTPException(
@@ -826,11 +941,17 @@ def handle_delete_video(
         except FileNotFoundError:
             pass
         except OSError as ex:
-            log(f"<!> Error deleting video: {type(ex).__name__}: {ex}")
+            log(
+                f"<!> Error deleting video: "
+                f"{type(ex).__name__}: {ex}"
+            )
             return JSONResponse(
                 {
                     "success": False,
-                    "error": (f"Unable to delete video: {type(ex).__name__}: {ex}"),
+                    "error": (
+                        "Unable to delete video: "
+                        f"{type(ex).__name__}: {ex}"
+                    ),
                 },
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

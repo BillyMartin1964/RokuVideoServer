@@ -12,7 +12,7 @@ The model represents:
     - Terms that must be present.
     - Terms that must not be present.
     - The field to search.
-    - An optional drive filter.
+    - Optional drive filters.
     - An optional directory filter.
     - Result offset.
     - Result limit.
@@ -33,9 +33,21 @@ Examples:
     "-dog deer bear"
         include_terms = ["deer", "bear"]
         exclude_terms = ["dog"]
+
+Drive filtering:
+
+    drives = []
+        Search all drives.
+
+    drives = ["Drive1"]
+        Search only Drive1.
+
+    drives = ["Drive1", "Drive2", "Drive3"]
+        Search only the selected drives.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from enum import Enum
 
 # ============================================================================
@@ -76,8 +88,9 @@ class VideoSearchModel:
         field:
             Determines whether the title, filename, or both are searched.
 
-        drive:
-            Optional drive name used to restrict the search.
+        drives:
+            Optional list of drive names used to restrict the search.
+            An empty list means that all drives may be searched.
 
         directory:
             Optional directory or subfolder used to restrict the search.
@@ -91,10 +104,10 @@ class VideoSearchModel:
     """
 
     search_text: str = ""
-    include_terms: list[str] = field(default_factory=list)
-    exclude_terms: list[str] = field(default_factory=list)
+    include_terms: list[str] = dataclass_field(default_factory=list)
+    exclude_terms: list[str] = dataclass_field(default_factory=list)
     field: VideoSearchField = VideoSearchField.FILENAME
-    drive: str | None = None
+    drives: list[str] = dataclass_field(default_factory=list)
     directory: str | None = None
     offset: int = 0
     limit: int = 0
@@ -110,7 +123,7 @@ class VideoSearchModel:
         include_terms: list[str] | None = None,
         exclude_terms: list[str] | None = None,
         field: VideoSearchField = VideoSearchField.FILENAME,
-        drive: str | None = None,
+        drives: list[str] | None = None,
         directory: str | None = None,
         offset: int = 0,
         limit: int = 0,
@@ -118,8 +131,11 @@ class VideoSearchModel:
         """
         Create a VideoSearchModel from supplied search values.
 
-        The include and exclude lists are copied so that the caller's lists
-        cannot be modified through the model.
+        The include, exclude, and drive lists are copied so that the caller's
+        lists cannot be modified through the model.
+
+        An omitted or None drives value becomes an empty list, which means
+        that the search is not restricted to specific drives.
 
         Pagination values are normalized to the API limits.
 
@@ -136,8 +152,9 @@ class VideoSearchModel:
             field:
                 Field to search.
 
-            drive:
-                Optional drive filter.
+            drives:
+                Optional list of drive filters.
+                An empty or omitted list means all drives.
 
             directory:
                 Optional directory filter.
@@ -158,7 +175,9 @@ class VideoSearchModel:
             include_terms=list(include_terms or []),
             exclude_terms=list(exclude_terms or []),
             field=field,
-            drive=(str(drive).strip() if drive is not None else None),
+            drives=[
+                str(drive).strip() for drive in (drives or []) if str(drive).strip()
+            ],
             directory=(str(directory).strip() if directory is not None else None),
             offset=max(0, offset),
             limit=max(0, min(limit, 500)),
@@ -174,13 +193,16 @@ class VideoSearchModel:
         file_name: str | None = None,
         search_field: str = "fileName",
         exclude_words: str | None = None,
-        drive: str | None = None,
+        drives: list[str] | None = None,
         directory: str | None = None,
         offset: int = 0,
         limit: int = 0,
     ) -> "VideoSearchModel":
         """
         Construct a VideoSearchModel directly from API route query parameters.
+
+        An omitted or None drives value means that the search is not
+        restricted to specific drives.
         """
         search_text = str(file_name or "").strip()
 
@@ -214,7 +236,7 @@ class VideoSearchModel:
             include_terms=inc_terms,
             exclude_terms=exc_terms,
             field=target_field,
-            drive=drive,
+            drives=drives,
             directory=directory,
             offset=offset,
             limit=limit,
