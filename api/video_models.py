@@ -101,11 +101,7 @@ def _get_item_file_name(item: dict) -> str:
 
     raw_name = str(item.get("name") or "").strip()
 
-    raw_ext = str(
-        item.get("ext")
-        or item.get("extension")
-        or ""
-    ).strip()
+    raw_ext = str(item.get("ext") or item.get("extension") or "").strip()
 
     if raw_ext and not raw_ext.startswith("."):
         raw_ext = "." + raw_ext
@@ -113,11 +109,7 @@ def _get_item_file_name(item: dict) -> str:
     if raw_name:
         return f"{raw_name}{raw_ext}" if raw_ext else raw_name
 
-    raw_path = str(
-        item.get("path")
-        or item.get("fullPath")
-        or ""
-    ).strip()
+    raw_path = str(item.get("path") or item.get("fullPath") or "").strip()
 
     if raw_path:
         return os.path.basename(raw_path)
@@ -175,13 +167,9 @@ def _get_matching_video_items(
                     continue
 
             if normalized_directory is not None:
-                item_directory = _normalize_directory(
-                    item.get("directory", "")
-                )
+                item_directory = _normalize_directory(item.get("directory", ""))
 
-                item_subfolder = _normalize_directory(
-                    item.get("subfolder", "")
-                )
+                item_subfolder = _normalize_directory(item.get("subfolder", ""))
 
                 if (
                     item_directory != normalized_directory
@@ -353,42 +341,15 @@ def handle_get_video_models(
 def handle_search_video_models(
     request: Request,
     file_name: str,
+    search_field: str = "fileName",
+    exclude_words: str | None = None,
     drive: str | None = None,
     directory: str | None = None,
     offset: int = 0,
     limit: int = 0,
 ):
     """
-    Search for videos whose filenames contain the supplied text.
-
-    The search is case-insensitive and uses substring matching.
-
-    Examples:
-
-        star
-            Matches:
-                Star Wars.mp4
-                Star Trek.mp4
-                My Star Video.mkv
-
-        STAR
-            Produces the same matches as "star".
-
-    Optional filters:
-        drive:
-            Restrict the search to one drive.
-
-        directory:
-            Restrict the search to one directory or subfolder.
-
-        offset:
-            Number of matching videos to skip.
-
-        limit:
-            Maximum number of matching VideoModels to return.
-            0 means return all matching videos.
-
-    The returned objects are complete VideoModel JSON objects.
+    Search for videos whose filenames or titles contain the supplied text.
     """
     search_text = str(file_name or "").strip()
 
@@ -404,18 +365,32 @@ def handle_search_video_models(
     normalized_drive = _normalize_drive(drive)
 
     normalized_directory = (
-        _normalize_directory(directory)
-        if directory is not None
-        else None
+        _normalize_directory(directory) if directory is not None else None
     )
 
     base_url = _get_base_url(request)
 
+    # Get matching items by filename
     matching = _get_matching_video_items_by_file_name(
         search_text,
         normalized_drive,
         normalized_directory,
     )
+
+    # Filter out excluded words if provided
+    if exclude_words:
+        exclusions = [
+            w.strip().casefold()
+            for w in exclude_words.replace(",", " ").split()
+            if w.strip()
+        ]
+        if exclusions:
+            filtered_matching = []
+            for item in matching:
+                item_name = _get_item_file_name(item).casefold()
+                if not any(exc in item_name for exc in exclusions):
+                    filtered_matching.append(item)
+            matching = filtered_matching
 
     total_count = len(matching)
 
@@ -616,9 +591,7 @@ def handle_move_video(
     if os.path.exists(dest_path):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "A video with that name already exists in the target directory."
-            ),
+            detail=("A video with that name already exists in the target directory."),
         )
 
     try:
@@ -642,20 +615,14 @@ def handle_move_video(
     volume_prefix = f"/Volumes/{drive_name}"
 
     if drive_name and target_directory.startswith(volume_prefix):
-        relative_directory = target_directory[
-            len(volume_prefix):
-        ].replace("\\", "/")
+        relative_directory = target_directory[len(volume_prefix) :].replace("\\", "/")
 
         if not relative_directory:
             relative_directory = "/"
         elif not relative_directory.startswith("/"):
             relative_directory = "/" + relative_directory
     else:
-        relative_directory = (
-            item.get("subfolder")
-            or item.get("directory")
-            or ""
-        )
+        relative_directory = item.get("subfolder") or item.get("directory") or ""
 
     updated_item = dict(item)
 
@@ -705,11 +672,7 @@ def handle_rename_video(
     """
     file_id = body.get("file_id") or body.get("id")
 
-    new_name = (
-        body.get("new_name")
-        or body.get("newName")
-        or ""
-    ).strip()
+    new_name = (body.get("new_name") or body.get("newName") or "").strip()
 
     if not file_id or not new_name:
         raise HTTPException(
@@ -867,9 +830,7 @@ def handle_delete_video(
             return JSONResponse(
                 {
                     "success": False,
-                    "error": (
-                        f"Unable to delete video: {type(ex).__name__}: {ex}"
-                    ),
+                    "error": (f"Unable to delete video: {type(ex).__name__}: {ex}"),
                 },
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

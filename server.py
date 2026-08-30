@@ -5,6 +5,7 @@ import socket
 import threading
 import time
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -417,7 +418,7 @@ def get_video_models(
 
 
 # --------------------------------------------------------------------------
-# VIDEO MODEL FILENAME SEARCH
+# VIDEO MODEL SEARCH
 #
 # This route MUST appear before /api/video-models/{file_id}.
 #
@@ -434,6 +435,23 @@ def get_video_models(
 def search_video_models(
     request: Request,
     fileName: str,
+    search_field: Literal["fileName", "title"] = Query(
+        "fileName",
+        description=(
+            "Field to search. "
+            "fileName searches the physical filename. "
+            "title searches the VideoModel title."
+        ),
+    ),
+    exclude_words: str | None = Query(
+        None,
+        description=(
+            "Optional words to exclude from results. "
+            "Separate multiple words with spaces or commas. "
+            "A video is excluded when any supplied word matches "
+            "the selected search field."
+        ),
+    ),
     drive: str | None = Query(
         None,
         description="Optional drive filter.",
@@ -457,30 +475,78 @@ def search_video_models(
     ),
 ):
     """
-    Search video filenames.
+    Search VideoModels using flexible text matching.
 
-    The search is case-insensitive and performs substring matching
-    against VideoModel.fileName.
+    search_field determines whether the search is performed against
+    the filename or the VideoModel title.
 
-    Example:
+    The default is fileName.
 
-        /api/video-models/search/star
+    Search is case-insensitive and supports partial terms.
 
-    matches filenames such as:
+    Multiple search terms are treated as independent terms.
+    All search terms must match, but they may appear in any order.
 
-        Star Wars.mp4
-        Star Trek.mp4
-        My Star Video.mkv
+    Common filename separators and punctuation are ignored.
+
+    Searches without spaces can match words that are separated
+    by spaces or punctuation in the searched value.
+
+    The file extension is ignored for filename searches.
+
+    exclude_words optionally removes results containing any of
+    the supplied exclusion words.
+
+    Examples:
+
+        fileName=deer
+
+            Matches:
+
+                Deer and Bear in the Woods.mp4
+
+        fileName=deer bear
+
+            Matches:
+
+                Deer and Bear in the Woods.mp4
+
+        fileName=bear deer
+
+            Also matches:
+
+                Deer and Bear in the Woods.mp4
+
+        fileName=mom son
+
+            Matches:
+
+                Mom and Son Playing.mp4
+
+        fileName=MomSon
+
+            Also matches:
+
+                Mom and Son Playing.mp4
+
+        exclude_words=bear
+
+            Excludes filenames/titles containing "bear".
+
+    Optional drive and directory filters can further restrict
+    the search results.
 
     The response contains complete VideoModel JSON objects.
     """
     return api_video_models.handle_search_video_models(
-        request,
-        fileName,
-        drive,
-        directory,
-        offset,
-        limit,
+        request=request,
+        file_name=fileName,
+        search_field=search_field,
+        exclude_words=exclude_words,
+        drive=drive,
+        directory=directory,
+        offset=offset,
+        limit=limit,
     )
 
 
