@@ -29,60 +29,43 @@ from services import (
 # Client Tracker Memory Store
 # ============================================================================
 
+
 CLIENT_ACTIVITY: dict[str, float] = {}
 CLIENT_LOCK = threading.Lock()
 START_TIME = time.time()
 
 
-def get_local_ip() -> str:
-    """Return the local IP address used by the server."""
+def get_local_ip():
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock = socket.socket(
+            socket.AF_INET,
+            socket.SOCK_DGRAM,
+        )
+
         sock.connect(("8.8.8.8", 80))
+
         ip = sock.getsockname()[0]
+
         sock.close()
 
         if ip:
             return ip
 
-    except OSError as ex:
-        log(f"<!> Could not determine local IP via socket: {ex}")
+    except OSError as e:
+        log(f"<!> Could not determine local IP via socket: {e}")
 
     try:
         hostname = socket.gethostname()
+
         ip = socket.gethostbyname(hostname)
 
         if ip and not ip.startswith("127."):
             return ip
 
-    except OSError as ex:
-        log(f"<!> Could not determine local IP via hostname: {ex}")
+    except OSError as e:
+        log(f"<!> Could not determine local IP via hostname: {e}")
 
     return "127.0.0.1"
-
-
-# ============================================================================
-# FastAPI Query Type Aliases
-# ============================================================================
-
-IncludeAllQuery = Annotated[
-    bool,
-    Query(
-        alias="all",
-        description="Set to true to return all drives with authorization status.",
-    ),
-]
-
-DrivesQuery = Annotated[
-    list[str] | None,
-    Query(
-        description=(
-            "Optional drive filter. "
-            "Repeat the parameter to specify multiple drives. "
-            "If omitted, all drives are searched."
-        ),
-    ),
-]
 
 
 # ============================================================================
@@ -109,6 +92,7 @@ class MoveVideoRequest(BaseModel):
         json_schema_extra={"example": "vid_001"},
         description="ID of the video to move",
     )
+
     target_directory: str = Field(
         ...,
         json_schema_extra={"example": "/media/USB1/Movies"},
@@ -122,6 +106,7 @@ class RenameVideoRequest(BaseModel):
         json_schema_extra={"example": "vid_001"},
         description="ID of the video to rename",
     )
+
     new_name: str = Field(
         ...,
         json_schema_extra={"example": "NewMovieName.mp4"},
@@ -150,6 +135,7 @@ async def lifespan(app: FastAPI):
         daemon=True,
         name="CatalogScanner",
     )
+
     timer_thread.start()
 
     watcher_observer = watcher_service.start_file_watcher()
@@ -205,8 +191,12 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def track_connected_clients(request: Request, call_next):
+async def track_connected_clients(
+    request: Request,
+    call_next,
+):
     """Tracks unique client IPs and their last active timestamps."""
+
     client_ip = request.client.host if request.client else "unknown"
 
     with CLIENT_LOCK:
@@ -222,12 +212,17 @@ async def track_connected_clients(request: Request, call_next):
 # ============================================================================
 
 
-@app.get("/api/health", tags=["Health"])
+@app.get(
+    "/api/health",
+    tags=["Health"],
+)
 def get_health(request: Request):
     """Return server health and status information including client metrics."""
+
     base_response = api_health.handle_get_health(request)
 
     now = time.time()
+
     five_mins_ago = now - 300
     twenty_four_hours_ago = now - 86400
 
@@ -255,10 +250,15 @@ def get_health(request: Request):
     return base_response
 
 
-@app.get("/api/clients", tags=["Health"])
+@app.get(
+    "/api/clients",
+    tags=["Health"],
+)
 def get_connected_clients():
     """Return connected client analytics and recently seen IP addresses."""
+
     now = time.time()
+
     five_mins_ago = now - 300
     twenty_four_hours_ago = now - 86400
 
@@ -298,9 +298,10 @@ def set_authorized_drives(
     body: SetAuthorizedDrivesRequest,
 ):
     """Set drives that users can see."""
+
     return api_drives.handle_set_authorized_drives(
         request,
-        body.model_dump() if hasattr(body, "model_dump") else body.dict(),
+        (body.model_dump() if hasattr(body, "model_dump") else body.dict()),
     )
 
 
@@ -310,13 +311,21 @@ def set_authorized_drives(
 )
 def get_drives(
     request: Request,
-    include_all: IncludeAllQuery = False,
+    include_all: Annotated[
+        bool,
+        Query(
+            False,
+            alias="all",
+            description=("Set to true to return all drives with authorization status."),
+        ),
+    ],
 ):
     """
     Return available physical drives and volume metadata.
 
     Defaults to returning authorized drives only.
     """
+
     return api_drives.handle_get_drives(
         request,
         include_all=include_all,
@@ -334,10 +343,13 @@ def get_drives(
 )
 def get_directories(
     request: Request,
-    drive: str | None = Query(
-        None,
-        description="Optional drive name filter.",
-    ),
+    drive: Annotated[
+        str | None,
+        Query(
+            None,
+            description="Optional drive name filter.",
+        ),
+    ],
 ):
     """
     Return directories.
@@ -346,6 +358,7 @@ def get_directories(
 
     With a drive parameter, returns directories for that drive.
     """
+
     if drive:
         return api_directories.handle_get_directories_by_drive(
             request,
@@ -364,6 +377,7 @@ def get_directories_by_drive(
     drive_name: str,
 ):
     """Return directories associated with a specific drive."""
+
     return api_directories.handle_get_directories_by_drive(
         request,
         drive_name,
@@ -377,12 +391,18 @@ def get_directories_by_drive(
 def get_child_directories(
     request: Request,
     drive: str,
-    directory: str = Query(
-        "",
-        description=("Directory whose immediate child directories should be returned."),
-    ),
+    directory: Annotated[
+        str,
+        Query(
+            "",
+            description=(
+                "Directory whose immediate child directories should be returned."
+            ),
+        ),
+    ],
 ):
     """Return only the immediate child directories."""
+
     return api_directories.handle_get_child_directories(
         request,
         drive,
@@ -401,41 +421,77 @@ def get_child_directories(
 )
 def get_video_models(
     request: Request,
-    drives: DrivesQuery = None,
-    directory: str | None = Query(
-        None,
-        description="Optional directory/subfolder filter.",
-    ),
-    offset: int = Query(
-        0,
-        ge=0,
-        description="Number of videos to skip.",
-    ),
-    limit: int = Query(
-        60,
-        ge=0,
-        le=500,
-        description="Maximum number of videos to return. Use 0 for all.",
-    ),
+    drives: Annotated[
+        list[str] | None,
+        Query(
+            None,
+            description=(
+                "Optional list of drive names to search. "
+                "Omit the parameter, or provide an empty list, "
+                "to search all drives. "
+                "Repeat the parameter for multiple drives."
+            ),
+            openapi_examples={
+                "all_drives": {
+                    "summary": "All drives",
+                    "description": ("Omit drives entirely to search all drives."),
+                    "value": [],
+                },
+                "one_drive": {
+                    "summary": "One drive",
+                    "description": "Search only one drive.",
+                    "value": ["Vids"],
+                },
+                "multiple_drives": {
+                    "summary": "Multiple drives",
+                    "description": ("Search multiple selected drives."),
+                    "value": ["Vids", "Movies"],
+                },
+            },
+        ),
+    ] = None,
+    directory: Annotated[
+        str | None,
+        Query(
+            None,
+            description=("Optional directory/subfolder filter."),
+        ),
+    ] = None,
+    offset: Annotated[
+        int,
+        Query(
+            0,
+            ge=0,
+            description="Number of videos to skip.",
+        ),
+    ] = 0,
+    limit: Annotated[
+        int,
+        Query(
+            60,
+            ge=0,
+            le=500,
+            description=("Maximum number of videos to return. Use 0 for all."),
+        ),
+    ] = 60,
 ):
     """
     Return VideoModels.
 
-    The drives query parameter is optional and may be repeated.
+    The optional drives parameter is an array.
 
     Examples:
 
         No drives:
-            /api/video-models
+            Search all drives.
 
-        One drive:
-            /api/video-models?drives=Vids
+        drives=Vids:
+            Search only Vids.
 
-        Multiple drives:
-            /api/video-models?drives=Vids&drives=Movies
-
-    If drives is omitted, all drives are searched.
+        drives=Vids&drives=Movies:
+            Search Vids and Movies.
     """
+
     return api_video_models.handle_get_video_models(
         request,
         drives,
@@ -463,41 +519,83 @@ def get_video_models(
 def search_video_models(
     request: Request,
     fileName: str,
-    search_field: Literal["fileName", "title"] = Query(
-        "fileName",
-        description=(
-            "Field to search. "
-            "fileName searches the physical filename. "
-            "title searches the VideoModel title."
+    search_field: Annotated[
+        Literal["fileName", "title"],
+        Query(
+            description=(
+                "Field to search. "
+                "fileName searches the physical filename. "
+                "title searches the VideoModel title."
+            ),
         ),
-    ),
-    exclude_words: str | None = Query(
-        None,
-        description=(
-            "Optional words to exclude from results. "
-            "Separate multiple words with spaces or commas. "
-            "A video is excluded when any supplied word matches "
-            "the selected search field."
+    ] = "fileName",
+    exclude_words: Annotated[
+        str | None,
+        Query(
+            None,
+            description=(
+                "Optional words to exclude from results. "
+                "Separate multiple words with spaces or commas. "
+                "A video is excluded when any supplied word "
+                "matches the selected search field."
+            ),
         ),
-    ),
-    drives: DrivesQuery = None,
-    directory: str | None = Query(
-        None,
-        description="Optional directory/subfolder filter.",
-    ),
-    offset: int = Query(
-        0,
-        ge=0,
-        description="Number of matching videos to skip.",
-    ),
-    limit: int = Query(
-        0,
-        ge=0,
-        le=500,
-        description=(
-            "Maximum number of matching VideoModels to return. Use 0 for all matches."
+    ] = None,
+    drives: Annotated[
+        list[str] | None,
+        Query(
+            None,
+            description=(
+                "Optional list of drive names to search. "
+                "Omit the parameter to search all drives. "
+                "Repeat the parameter for multiple drives."
+            ),
+            openapi_examples={
+                "all_drives": {
+                    "summary": "All drives",
+                    "description": ("Omit drives entirely to search all drives."),
+                    "value": [],
+                },
+                "one_drive": {
+                    "summary": "One drive",
+                    "description": "Search only one drive.",
+                    "value": ["Vids"],
+                },
+                "multiple_drives": {
+                    "summary": "Multiple drives",
+                    "description": ("Search multiple selected drives."),
+                    "value": ["Vids", "Movies"],
+                },
+            },
         ),
-    ),
+    ] = None,
+    directory: Annotated[
+        str | None,
+        Query(
+            None,
+            description=("Optional directory/subfolder filter."),
+        ),
+    ] = None,
+    offset: Annotated[
+        int,
+        Query(
+            0,
+            ge=0,
+            description="Number of matching videos to skip.",
+        ),
+    ] = 0,
+    limit: Annotated[
+        int,
+        Query(
+            0,
+            ge=0,
+            le=500,
+            description=(
+                "Maximum number of matching VideoModels "
+                "to return. Use 0 for all matches."
+            ),
+        ),
+    ] = 0,
 ):
     """
     Search VideoModels using flexible text matching.
@@ -522,7 +620,13 @@ def search_video_models(
     exclude_words optionally removes results containing any of
     the supplied exclusion words.
 
-    The drives parameter is optional and may be repeated.
+    The drives parameter is optional.
+
+    If drives is omitted, all drives are searched.
+
+    If one drive is supplied, only that drive is searched.
+
+    If multiple drives are supplied, all selected drives are searched.
 
     Examples:
 
@@ -560,17 +664,17 @@ def search_video_models(
 
             Excludes filenames/titles containing "bear".
 
+        drives=Vids
+
+            Searches only Vids.
+
         drives=Vids&drives=Movies
 
-            Searches only Vids and Movies.
-
-    If drives is omitted, all drives are searched.
-
-    Optional directory filters can further restrict
-    the search results.
+            Searches Vids and Movies.
 
     The response contains complete VideoModel JSON objects.
     """
+
     return api_video_models.handle_search_video_models(
         request=request,
         file_name=fileName,
@@ -597,6 +701,7 @@ def get_video_model(
     The response contains metadata and URLs for the thumbnail
     and video stream. The video itself is not returned.
     """
+
     return api_video_models.handle_get_video_model(
         request,
         file_id,
@@ -616,6 +721,7 @@ def get_video_model_thumbnail(
 
     The VideoModel contains the URL to this endpoint.
     """
+
     return api_video_models.handle_get_thumbnail(
         request,
         file_id,
@@ -636,9 +742,10 @@ def move_video(
     body: MoveVideoRequest,
 ):
     """Move a video to another directory."""
+
     return api_video_models.handle_move_video(
         request,
-        body.model_dump() if hasattr(body, "model_dump") else body.dict(),
+        (body.model_dump() if hasattr(body, "model_dump") else body.dict()),
     )
 
 
@@ -651,9 +758,10 @@ def rename_video(
     body: RenameVideoRequest,
 ):
     """Rename a video."""
+
     return api_video_models.handle_rename_video(
         request,
-        body.model_dump() if hasattr(body, "model_dump") else body.dict(),
+        (body.model_dump() if hasattr(body, "model_dump") else body.dict()),
     )
 
 
@@ -666,6 +774,7 @@ def delete_video(
     file_id: str,
 ):
     """Delete a video and remove it from the catalog."""
+
     return api_video_models.handle_delete_video(
         request,
         file_id,
