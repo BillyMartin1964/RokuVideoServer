@@ -5,7 +5,7 @@ import socket
 import threading
 import time
 from contextlib import asynccontextmanager
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -435,44 +435,62 @@ def get_video_models(
 def search_video_models(
     request: Request,
     fileName: str,
-    search_field: Literal["fileName", "title"] = Query(
-        "fileName",
-        description=(
-            "Field to search. "
-            "fileName searches the physical filename. "
-            "title searches the VideoModel title."
+    search_field: Annotated[
+        Literal["fileName", "title"],
+        Query(
+            description=(
+                "Field to search. "
+                "fileName searches the physical filename. "
+                "title searches the VideoModel title."
+            ),
         ),
-    ),
-    exclude_words: str | None = Query(
-        None,
-        description=(
-            "Optional words to exclude from results. "
-            "Separate multiple words with spaces or commas. "
-            "A video is excluded when any supplied word matches "
-            "the selected search field."
+    ] = "fileName",
+    exclude_words: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Optional words to exclude from results. "
+                "Separate multiple words with spaces or commas. "
+                "A video is excluded when any supplied word matches "
+                "the selected search field."
+            ),
         ),
-    ),
-    drive: str | None = Query(
-        None,
-        description="Optional drive filter.",
-    ),
-    directory: str | None = Query(
-        None,
-        description="Optional directory/subfolder filter.",
-    ),
-    offset: int = Query(
-        0,
-        ge=0,
-        description="Number of matching videos to skip.",
-    ),
-    limit: int = Query(
-        0,
-        ge=0,
-        le=500,
-        description=(
-            "Maximum number of matching VideoModels to return. Use 0 for all matches."
+    ] = None,
+    drives: Annotated[
+        list[str] | None,
+        Query(
+            description=(
+                "Optional list of drive names to search. "
+                "Repeat the drives parameter for multiple drives, "
+                "for example: drives=Vids&drives=Movies. "
+                "If omitted, all drives are searched."
+            ),
         ),
-    ),
+    ] = None,
+    directory: Annotated[
+        str | None,
+        Query(
+            description="Optional directory/subfolder filter.",
+        ),
+    ] = None,
+    offset: Annotated[
+        int,
+        Query(
+            ge=0,
+            description="Number of matching videos to skip.",
+        ),
+    ] = 0,
+    limit: Annotated[
+        int,
+        Query(
+            ge=0,
+            le=500,
+            description=(
+                "Maximum number of matching VideoModels to return. "
+                "Use 0 for all matches."
+            ),
+        ),
+    ] = 0,
 ):
     """
     Search VideoModels using flexible text matching.
@@ -496,6 +514,10 @@ def search_video_models(
 
     exclude_words optionally removes results containing any of
     the supplied exclusion words.
+
+    The optional drives parameter restricts the search to the
+    specified drives. The parameter may be repeated to search
+    multiple drives.
 
     Examples:
 
@@ -533,7 +555,19 @@ def search_video_models(
 
             Excludes filenames/titles containing "bear".
 
-    Optional drive and directory filters can further restrict
+        drives=Vids
+
+            Searches only the Vids drive.
+
+        drives=Vids&drives=Movies
+
+            Searches both the Vids and Movies drives.
+
+        No drives parameter
+
+            Searches all drives.
+
+    Optional directory filtering can further restrict
     the search results.
 
     The response contains complete VideoModel JSON objects.
@@ -543,7 +577,7 @@ def search_video_models(
         file_name=fileName,
         search_field=search_field,
         exclude_words=exclude_words,
-        drive=drive,
+        drives=drives,
         directory=directory,
         offset=offset,
         limit=limit,

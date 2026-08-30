@@ -53,6 +53,33 @@ def _normalize_drive(value) -> str:
     return str(value).strip().strip("/")
 
 
+def _normalize_drive_list(values) -> list[str]:
+    """
+    Normalize a collection of drive names.
+
+    Empty values are removed and duplicate drive names are eliminated
+    while preserving their original order.
+
+    This is used by the filename search endpoint, where the Roku
+    application can select zero, one, or multiple drives.
+    """
+    if values is None:
+        return []
+
+    if isinstance(values, str):
+        values = [values]
+
+    normalized: list[str] = []
+
+    for value in values:
+        drive = _normalize_drive(value)
+
+        if drive and drive not in normalized:
+            normalized.append(drive)
+
+    return normalized
+
+
 def _normalize_directory(value) -> str:
     """
     Normalize a directory path for comparison.
@@ -144,8 +171,10 @@ def _get_matching_video_items(
     """
     Return catalog items matching the requested drive and directory.
 
-    This function only examines the existing catalog. It does not
-    perform a filesystem scan.
+    This function is used by the normal VideoModel browsing endpoint.
+
+    The normal browsing endpoint intentionally accepts only one drive.
+    Multi-drive filtering belongs to the filename search endpoint.
     """
     normalized_drive = _normalize_drive(drive)
 
@@ -182,19 +211,68 @@ def _get_matching_video_items(
         return matching
 
 
-def _get_matching_video_items_by_file_name(
-    file_name: str,
-    drive: str | None = None,
+def _get_matching_video_items_by_drives(
+    drives: list[str] | None = None,
     directory: str | None = None,
 ):
     """
-    Return catalog items whose filenames contain the supplied
-    search text.
+    Return catalog items belonging to any of the selected drives.
 
-    Matching is case-insensitive substring matching.
+    This function is specifically for filename searching.
 
-    Optional drive and directory filters are applied before the
-    filename comparison.
+    When drives contains multiple values, a video matches when its
+    catalog drive matches any selected drive.
+
+    When drives is empty or None, all drives are eligible.
+
+    An optional directory filter can additionally restrict the results.
+    """
+    normalized_drives = _normalize_drive_list(drives)
+
+    normalized_directory = (
+        _normalize_directory(directory) if directory is not None else None
+    )
+
+    with CACHE_LOCK:
+        matching = []
+
+        for item in config.FILES_LIST:
+            if not isinstance(item, dict):
+                continue
+
+            if normalized_drives:
+                item_drive = _normalize_drive(item.get("drive", ""))
+
+                if item_drive not in normalized_drives:
+                    continue
+
+            if normalized_directory is not None:
+                item_directory = _normalize_directory(item.get("directory", ""))
+
+                item_subfolder = _normalize_directory(item.get("subfolder", ""))
+
+                if (
+                    item_directory != normalized_directory
+                    and item_subfolder != normalized_directory
+                ):
+                    continue
+
+            matching.append(item)
+
+        return matching
+
+
+def _get_matching_video_items_by_file_name(
+    file_name: str,
+    drives: list[str] | None = None,
+    directory: str | None = None,
+):
+    """
+    Return catalog items whose filenames contain the supplied search text.
+
+    Matching is case-insensitive.
+
+    The search can be restricted to zero, one, or multiple drives.
 
     This function only examines the existing catalog. It does not
     perform a filesystem scan.
@@ -204,8 +282,8 @@ def _get_matching_video_items_by_file_name(
     if not search_text:
         return []
 
-    candidate_items = _get_matching_video_items(
-        drive,
+    candidate_items = _get_matching_video_items_by_drives(
+        drives,
         directory,
     )
 
@@ -233,9 +311,11 @@ def handle_get_video_models(
     """
     Return VideoModels for videos matching the requested filters.
 
+    This is the VideoGrid browsing operation.
+
     Optional filters:
         drive:
-            Physical drive name.
+            One physical drive name.
 
         directory:
             Directory or subfolder containing the videos.
@@ -248,12 +328,15 @@ def handle_get_video_models(
             0 means return all remaining videos.
 
     If a specific drive and directory are requested and the existing
-    catalog contains no matching videos, a targeted filesystem scan
-    is performed for that directory. Any discovered videos are added
-    to the catalog and the query is then performed again.
+    catalog contains no matching videos, a targeted filesystem scan is
+    performed for that directory.
 
     The response contains VideoModel JSON objects.
     It does not contain video bytes.
+
+    NOTE:
+        This endpoint intentionally remains single-drive. Multi-drive
+        selection is handled by the filename search endpoint.
     """
     offset = max(0, offset)
     limit = max(0, min(limit, 500))
@@ -343,13 +426,43 @@ def handle_search_video_models(
     file_name: str,
     search_field: str = "fileName",
     exclude_words: str | None = None,
-    drive: str | None = None,
+    drives: list[str] | None = None,
     directory: str | None = None,
     offset: int = 0,
     limit: int = 0,
 ):
     """
-    Search for videos whose filenames or titles contain the supplied text.
+    Search VideoModels by filename or title.
+
+    The search endpoint is separate from the normal VideoGrid
+    browsing endpoint.
+
+    The drives parameter accepts zero, one, or multiple drive names.
+    When multiple drives are supplied, a video may match if it belongs
+    to any selected drive.
+
+    This allows the Roku application's drive checkboxes to determine
+    which drives participate in the filename search.
+
+    Examples:
+
+        drives=Vids
+
+            Search only the Vids drive.
+
+        drives=Vids&drives=Movies
+
+            Search both Vids and Movies.
+
+        drives=Vids&drives=Movies&drives=Archive
+
+            Search all three selected drives.
+
+        No drives parameter
+
+            Search all drives.
+
+    The search itself is currently performed against filenames.
     """
     search_text = str(file_name or "").strip()
 
@@ -362,7 +475,7 @@ def handle_search_video_models(
     offset = max(0, offset)
     limit = max(0, min(limit, 500))
 
-    normalized_drive = _normalize_drive(drive)
+    normalized_drives = _normalize_drive_list(drives)
 
     normalized_directory = (
         _normalize_directory(directory) if directory is not None else None
@@ -370,26 +483,39 @@ def handle_search_video_models(
 
     base_url = _get_base_url(request)
 
-    # Get matching items by filename
+    # ------------------------------------------------------------
+    # SEARCH BY FILENAME
+    #
+    # Drive filtering is performed here, not in the normal
+    # VideoGrid VideoModel retrieval endpoint.
+    # ------------------------------------------------------------
+
     matching = _get_matching_video_items_by_file_name(
         search_text,
-        normalized_drive,
+        normalized_drives,
         normalized_directory,
     )
 
-    # Filter out excluded words if provided
+    # ------------------------------------------------------------
+    # EXCLUDE WORDS
+    # ------------------------------------------------------------
+
     if exclude_words:
         exclusions = [
-            w.strip().casefold()
-            for w in exclude_words.replace(",", " ").split()
-            if w.strip()
+            word.strip().casefold()
+            for word in exclude_words.replace(",", " ").split()
+            if word.strip()
         ]
+
         if exclusions:
             filtered_matching = []
+
             for item in matching:
                 item_name = _get_item_file_name(item).casefold()
-                if not any(exc in item_name for exc in exclusions):
+
+                if not any(exclusion in item_name for exclusion in exclusions):
                     filtered_matching.append(item)
+
             matching = filtered_matching
 
     total_count = len(matching)
@@ -413,7 +539,7 @@ def handle_search_video_models(
     log(
         f"VIDEO MODEL FILENAME SEARCH: "
         f"search=[{search_text}] "
-        f"drive=[{normalized_drive}] "
+        f"drives=[{normalized_drives}] "
         f"directory=[{normalized_directory}] "
         f"matches=[{total_count}] "
         f"returned=[{len(formatted_chunk)}]"
@@ -423,6 +549,9 @@ def handle_search_video_models(
         {
             "success": True,
             "search": search_text,
+            "searchField": search_field,
+            "drives": normalized_drives,
+            "directory": normalized_directory,
             "total": total_count,
             "offset": offset,
             "limit": limit,
@@ -572,6 +701,7 @@ def handle_move_video(
         )
     except OSError as ex:
         log(f"<!> Error creating target directory: {type(ex).__name__}: {ex}")
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to create target directory.",
@@ -601,6 +731,7 @@ def handle_move_video(
         )
     except (OSError, shutil.Error) as ex:
         log(f"<!> Error moving video: {type(ex).__name__}: {ex}")
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to move video.",
@@ -744,6 +875,7 @@ def handle_rename_video(
         )
     except OSError as ex:
         log(f"<!> Error renaming video: {type(ex).__name__}: {ex}")
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to rename video.",
@@ -827,6 +959,7 @@ def handle_delete_video(
             pass
         except OSError as ex:
             log(f"<!> Error deleting video: {type(ex).__name__}: {ex}")
+
             return JSONResponse(
                 {
                     "success": False,
