@@ -26,7 +26,7 @@ from services import (
 )
 
 # ============================================================================
-# Client Tracker Memory Store
+# CLIENT TRACKER MEMORY STORE
 # ============================================================================
 
 
@@ -36,7 +36,7 @@ START_TIME = time.time()
 
 
 def get_local_ip() -> str:
-    """Return the local network IP address used by the server."""
+    """Return the best available local IPv4 address for this machine."""
 
     try:
         sock = socket.socket(
@@ -46,15 +46,17 @@ def get_local_ip() -> str:
 
         try:
             sock.connect(("8.8.8.8", 80))
+
             ip = sock.getsockname()[0]
+
+            if ip:
+                return ip
+
         finally:
             sock.close()
 
-        if ip:
-            return ip
-
-    except OSError as e:
-        log(f"<!> Could not determine local IP via socket: {e}")
+    except OSError as ex:
+        log(f"<!> Could not determine local IP via socket: {ex}")
 
     try:
         hostname = socket.gethostname()
@@ -64,20 +66,18 @@ def get_local_ip() -> str:
         if ip and not ip.startswith("127."):
             return ip
 
-    except OSError as e:
-        log(f"<!> Could not determine local IP via hostname: {e}")
+    except OSError as ex:
+        log(f"<!> Could not determine local IP via hostname: {ex}")
 
     return "127.0.0.1"
 
 
 # ============================================================================
-# Pydantic Request Models
+# PYDANTIC REQUEST MODELS
 # ============================================================================
 
 
 class SetAuthorizedDrivesRequest(BaseModel):
-    """Request used to set the drives authorized for API access."""
-
     authorized_drives: list[str] = Field(
         ...,
         json_schema_extra={
@@ -91,8 +91,6 @@ class SetAuthorizedDrivesRequest(BaseModel):
 
 
 class MoveVideoRequest(BaseModel):
-    """Request used to move a video to another directory."""
-
     file_id: str = Field(
         ...,
         json_schema_extra={"example": "vid_001"},
@@ -107,8 +105,6 @@ class MoveVideoRequest(BaseModel):
 
 
 class RenameVideoRequest(BaseModel):
-    """Request used to rename a video."""
-
     file_id: str = Field(
         ...,
         json_schema_extra={"example": "vid_001"},
@@ -123,14 +119,12 @@ class RenameVideoRequest(BaseModel):
 
 
 # ============================================================================
-# FastAPI Lifespan
+# FASTAPI LIFESPAN
 # ============================================================================
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize and shut down Roku Media Hub services."""
-
     log_separator()
     log("ROKU MEDIA HUB SERVER (FastAPI)")
     log("Starting services...")
@@ -169,7 +163,7 @@ async def lifespan(app: FastAPI):
 
 
 # ============================================================================
-# FastAPI Application
+# FASTAPI APPLICATION
 # ============================================================================
 
 
@@ -187,7 +181,7 @@ app = FastAPI(
 
 
 # ============================================================================
-# Global Middleware
+# GLOBAL MIDDLEWARE
 # ============================================================================
 
 
@@ -205,7 +199,7 @@ async def track_connected_clients(
     request: Request,
     call_next,
 ):
-    """Track unique client IPs and their last active timestamps."""
+    """Track unique client IPs and their last activity timestamps."""
 
     client_ip = request.client.host if request.client else "unknown"
 
@@ -227,7 +221,7 @@ async def track_connected_clients(
     tags=["Health"],
 )
 def get_health(request: Request):
-    """Return server health and status information."""
+    """Return server health and status information including client metrics."""
 
     base_response = api_health.handle_get_health(request)
 
@@ -238,7 +232,9 @@ def get_health(request: Request):
 
     with CLIENT_LOCK:
         active_clients = sum(
-            1 for last_seen in CLIENT_ACTIVITY.values() if last_seen >= five_mins_ago
+            1
+            for last_seen in CLIENT_ACTIVITY.values()
+            if last_seen >= five_mins_ago
         )
 
         clients_24h = sum(
@@ -254,7 +250,9 @@ def get_health(request: Request):
 
         if "driveCount" not in base_response and "drive_count" not in base_response:
             base_response["driveCount"] = (
-                len(config.FILE_MAP) if hasattr(config, "FILE_MAP") else 0
+                len(config.FILE_MAP)
+                if hasattr(config, "FILE_MAP")
+                else 0
             )
 
     return base_response
@@ -307,11 +305,15 @@ def set_authorized_drives(
     request: Request,
     body: SetAuthorizedDrivesRequest,
 ):
-    """Set the drives that users can see."""
+    """Set drives that users can see."""
 
     return api_drives.handle_set_authorized_drives(
         request,
-        (body.model_dump() if hasattr(body, "model_dump") else body.dict()),
+        (
+            body.model_dump()
+            if hasattr(body, "model_dump")
+            else body.dict()
+        ),
     )
 
 
@@ -326,11 +328,17 @@ def get_drives(
         Query(
             False,
             alias="all",
-            description=("Set to true to return all drives with authorization status."),
+            description=(
+                "Set to true to return all drives with authorization status."
+            ),
         ),
     ],
 ):
-    """Return available physical drives and volume metadata."""
+    """
+    Return available physical drives and volume metadata.
+
+    Defaults to returning authorized drives only.
+    """
 
     return api_drives.handle_get_drives(
         request,
@@ -360,9 +368,9 @@ def get_directories(
     """
     Return directories.
 
-    Without a drive parameter, return directories for all drives.
+    Without a drive parameter, returns directories for all drives.
 
-    With a drive parameter, return directories for that drive.
+    With a drive parameter, returns directories for that drive.
     """
 
     if drive:
@@ -430,21 +438,20 @@ def get_video_models(
     drives: Annotated[
         list[str] | None,
         Query(
-            None,
             description=(
-                "Optional list of drive names. "
-                "Omit drives to search all drives. "
-                "For multiple drives, repeat the drives parameter."
+                "Optional drive names to search. "
+                "Repeat the drives parameter for multiple drives. "
+                "Omit the parameter to search all drives."
             ),
         ),
-    ],
+    ] = None,
     directory: Annotated[
         str | None,
         Query(
             None,
             description="Optional directory/subfolder filter.",
         ),
-    ],
+    ] = None,
     offset: Annotated[
         int,
         Query(
@@ -452,48 +459,42 @@ def get_video_models(
             ge=0,
             description="Number of videos to skip.",
         ),
-    ],
+    ] = 0,
     limit: Annotated[
         int,
         Query(
             60,
             ge=0,
             le=500,
-            description=("Maximum number of videos to return. Use 0 for all."),
+            description=(
+                "Maximum number of videos to return. Use 0 for all."
+            ),
         ),
-    ],
+    ] = 60,
 ):
     """
     Return VideoModels.
 
-    The drives parameter is optional.
+    The drives parameter is a repeatable query parameter.
 
-    Omitted drives:
-        Search all drives.
+    Examples:
 
-    One drive:
-        Search only that drive.
+        No drives:
+            /api/video-models
 
-    Multiple drives:
-        Search all selected drives.
+        One drive:
+            /api/video-models?drives=Vids
 
-    FastAPI represents the drives parameter as a query array.
-
-    Example:
-
-        /api/video-models?drives=Vids
-
-    Multiple drives:
-
-        /api/video-models?drives=Vids&drives=Movies
+        Multiple drives:
+            /api/video-models?drives=Vids&drives=Movies
     """
 
     return api_video_models.handle_get_video_models(
-        request=request,
-        drives=drives,
-        directory=directory,
-        offset=offset,
-        limit=limit,
+        request,
+        drives,
+        directory,
+        offset,
+        limit,
     )
 
 
@@ -531,18 +532,19 @@ def search_video_models(
             None,
             description=(
                 "Optional words to exclude from results. "
-                "Separate multiple words with spaces or commas."
+                "Separate multiple words with spaces or commas. "
+                "A video is excluded when any supplied word "
+                "matches the selected search field."
             ),
         ),
     ] = None,
     drives: Annotated[
         list[str] | None,
         Query(
-            None,
             description=(
-                "Optional list of drive names. "
-                "Omit drives to search all drives. "
-                "For multiple drives, repeat the drives parameter."
+                "Optional drive names to search. "
+                "Omit the parameter to search all drives. "
+                "Repeat the drives parameter for multiple drives."
             ),
         ),
     ] = None,
@@ -568,8 +570,8 @@ def search_video_models(
             ge=0,
             le=500,
             description=(
-                "Maximum number of matching VideoModels to return. "
-                "Use 0 for all matches."
+                "Maximum number of matching VideoModels "
+                "to return. Use 0 for all matches."
             ),
         ),
     ] = 0,
@@ -577,28 +579,79 @@ def search_video_models(
     """
     Search VideoModels using flexible text matching.
 
+    search_field determines whether the search is performed against
+    the filename or the VideoModel title.
+
+    The default is fileName.
+
+    Search is case-insensitive and supports partial terms.
+
+    Multiple search terms are treated as independent terms.
+    All search terms must match, but they may appear in any order.
+
+    Common filename separators and punctuation are ignored.
+
+    Searches without spaces can match words that are separated
+    by spaces or punctuation in the searched value.
+
+    The file extension is ignored for filename searches.
+
+    exclude_words optionally removes results containing any of
+    the supplied exclusion words.
+
     The drives parameter is optional.
 
-    Omitted drives:
-        Search all drives.
+    If drives is omitted, all drives are searched.
 
-    One drive:
-        Search only that drive.
+    If one drive is supplied, only that drive is searched.
 
-    Multiple drives:
-        Search all selected drives.
+    If multiple drives are supplied, all selected drives are searched.
 
-    Example:
+    Examples:
 
-        /api/video-models/search/deer
+        fileName=deer
 
-    One drive:
+            Matches:
 
-        /api/video-models/search/deer?drives=Vids
+                Deer and Bear in the Woods.mp4
 
-    Multiple drives:
+        fileName=deer bear
 
-        /api/video-models/search/deer?drives=Vids&drives=Movies
+            Matches:
+
+                Deer and Bear in the Woods.mp4
+
+        fileName=bear deer
+
+            Also matches:
+
+                Deer and Bear in the Woods.mp4
+
+        fileName=mom son
+
+            Matches:
+
+                Mom and Son Playing.mp4
+
+        fileName=MomSon
+
+            Also matches:
+
+                Mom and Son Playing.mp4
+
+        exclude_words=bear
+
+            Excludes filenames/titles containing "bear".
+
+        drives=Vids
+
+            Searches only Vids.
+
+        drives=Vids&drives=Movies
+
+            Searches Vids and Movies.
+
+    The response contains complete VideoModel JSON objects.
     """
 
     return api_video_models.handle_search_video_models(
@@ -613,56 +666,22 @@ def search_video_models(
     )
 
 
-# ============================================================================
-# VIDEO MANAGEMENT ENDPOINTS
-#
-# These fixed routes must appear before /api/video-models/{file_id}.
-# ============================================================================
-
-
-@app.post(
-    "/api/video-models/move",
-    tags=["Video Models"],
-)
-def move_video(
-    request: Request,
-    body: MoveVideoRequest,
-):
-    """Move a video to another directory."""
-
-    return api_video_models.handle_move_video(
-        request,
-        (body.model_dump() if hasattr(body, "model_dump") else body.dict()),
-    )
-
-
-@app.post(
-    "/api/video-models/rename",
-    tags=["Video Models"],
-)
-def rename_video(
-    request: Request,
-    body: RenameVideoRequest,
-):
-    """Rename a video."""
-
-    return api_video_models.handle_rename_video(
-        request,
-        (body.model_dump() if hasattr(body, "model_dump") else body.dict()),
-    )
-
-
-@app.delete(
+@app.get(
     "/api/video-models/{file_id}",
     tags=["Video Models"],
 )
-def delete_video(
+def get_video_model(
     request: Request,
     file_id: str,
 ):
-    """Delete a video and remove it from the catalog."""
+    """
+    Return the complete VideoModel for one video.
 
-    return api_video_models.handle_delete_video(
+    The response contains metadata and URLs for the thumbnail
+    and video stream. The video itself is not returned.
+    """
+
+    return api_video_models.handle_get_video_model(
         request,
         file_id,
     )
@@ -688,22 +707,62 @@ def get_video_model_thumbnail(
     )
 
 
-@app.get(
+# ============================================================================
+# VIDEO MANAGEMENT ENDPOINTS
+# ============================================================================
+
+
+@app.post(
+    "/api/video-models/move",
+    tags=["Video Models"],
+)
+def move_video(
+    request: Request,
+    body: MoveVideoRequest,
+):
+    """Move a video to another directory."""
+
+    return api_video_models.handle_move_video(
+        request,
+        (
+            body.model_dump()
+            if hasattr(body, "model_dump")
+            else body.dict()
+        ),
+    )
+
+
+@app.post(
+    "/api/video-models/rename",
+    tags=["Video Models"],
+)
+def rename_video(
+    request: Request,
+    body: RenameVideoRequest,
+):
+    """Rename a video."""
+
+    return api_video_models.handle_rename_video(
+        request,
+        (
+            body.model_dump()
+            if hasattr(body, "model_dump")
+            else body.dict()
+        ),
+    )
+
+
+@app.delete(
     "/api/video-models/{file_id}",
     tags=["Video Models"],
 )
-def get_video_model(
+def delete_video(
     request: Request,
     file_id: str,
 ):
-    """
-    Return the complete VideoModel for one video.
+    """Delete a video and remove it from the catalog."""
 
-    The response contains metadata and URLs for the thumbnail
-    and video stream. The video itself is not returned.
-    """
-
-    return api_video_models.handle_get_video_model(
+    return api_video_models.handle_delete_video(
         request,
         file_id,
     )
@@ -752,7 +811,7 @@ def stream_video(
 
 
 # ============================================================================
-# Application Entry Point
+# APPLICATION ENTRY POINT
 # ============================================================================
 
 

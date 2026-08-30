@@ -17,6 +17,7 @@ from services.video_service import (
 
 def _get_base_url(request: Request) -> str:
     """Return the server base URL without a trailing slash."""
+
     if hasattr(request, "base_url"):
         return str(request.base_url).rstrip("/")
 
@@ -25,12 +26,14 @@ def _get_base_url(request: Request) -> str:
 
 def _get_video_item(file_id: str):
     """Return a catalog item by video ID."""
+
     with CACHE_LOCK:
         return config.FILE_MAP.get(file_id)
 
 
 def _get_video_path(item: dict) -> str:
     """Return the physical path stored in a video catalog item."""
+
     return item.get("path") or item.get("fullPath") or ""
 
 
@@ -47,6 +50,7 @@ def _normalize_drive(value) -> str:
         Vids/   -> Vids
         /Vids/  -> Vids
     """
+
     if value is None:
         return ""
 
@@ -63,6 +67,7 @@ def _normalize_drives(drives: list[str] | None) -> list[str]:
     Empty drive names are removed and duplicate drive names are
     removed while preserving the original order.
     """
+
     if not drives:
         return []
 
@@ -95,6 +100,7 @@ def _normalize_directory(value) -> str:
 
     The root directory is represented internally as an empty string.
     """
+
     if value is None:
         return ""
 
@@ -118,25 +124,42 @@ def _get_item_file_name(item: dict) -> str:
         3. name
         4. Filename extracted from path/fullPath
     """
+
     if not isinstance(item, dict):
         return ""
 
-    supplied_file_name = str(item.get("fileName") or "").strip()
+    supplied_file_name = str(
+        item.get("fileName") or ""
+    ).strip()
 
     if supplied_file_name:
         return supplied_file_name
 
-    raw_name = str(item.get("name") or "").strip()
+    raw_name = str(
+        item.get("name") or ""
+    ).strip()
 
-    raw_ext = str(item.get("ext") or item.get("extension") or "").strip()
+    raw_ext = str(
+        item.get("ext")
+        or item.get("extension")
+        or ""
+    ).strip()
 
     if raw_ext and not raw_ext.startswith("."):
         raw_ext = "." + raw_ext
 
     if raw_name:
-        return f"{raw_name}{raw_ext}" if raw_ext else raw_name
+        return (
+            f"{raw_name}{raw_ext}"
+            if raw_ext
+            else raw_name
+        )
 
-    raw_path = str(item.get("path") or item.get("fullPath") or "").strip()
+    raw_path = str(
+        item.get("path")
+        or item.get("fullPath")
+        or ""
+    ).strip()
 
     if raw_path:
         return os.path.basename(raw_path)
@@ -144,13 +167,17 @@ def _get_item_file_name(item: dict) -> str:
     return ""
 
 
-def _model_to_dict(item: dict, base_url: str) -> dict:
+def _model_to_dict(
+    item: dict,
+    base_url: str,
+) -> dict:
     """
     Convert a catalog item into the standard VideoModel dictionary.
 
     The returned model contains video metadata and URLs.
     The video bytes are never included.
     """
+
     model = create_video_model(
         item,
         base_url=base_url,
@@ -159,7 +186,10 @@ def _model_to_dict(item: dict, base_url: str) -> dict:
     file_id = model.id
 
     if file_id:
-        model.thumbnailUrl = f"{base_url}/api/video-models/{file_id}/thumbnail"
+        model.thumbnailUrl = (
+            f"{base_url}/api/video-models/"
+            f"{file_id}/thumbnail"
+        )
 
     return model.model_dump()
 
@@ -185,10 +215,13 @@ def _get_matching_video_items(
     This function only examines the existing catalog. It does not
     perform a filesystem scan.
     """
+
     normalized_drives = _normalize_drives(drives)
 
     normalized_directory = (
-        _normalize_directory(directory) if directory is not None else None
+        _normalize_directory(directory)
+        if directory is not None
+        else None
     )
 
     with CACHE_LOCK:
@@ -199,7 +232,9 @@ def _get_matching_video_items(
                 continue
 
             if normalized_drives:
-                item_drive = _normalize_drive(item.get("drive", ""))
+                item_drive = _normalize_drive(
+                    item.get("drive", "")
+                )
 
                 if item_drive not in normalized_drives:
                     continue
@@ -243,7 +278,10 @@ def _get_matching_video_items_by_file_name(
     This function only examines the existing catalog. It does not
     perform a filesystem scan.
     """
-    search_text = str(file_name or "").strip().casefold()
+
+    search_text = str(
+        file_name or ""
+    ).strip().casefold()
 
     if not search_text:
         return []
@@ -300,13 +338,16 @@ def handle_get_video_models(
     The response contains VideoModel JSON objects.
     It does not contain video bytes.
     """
+
     offset = max(0, offset)
     limit = max(0, min(limit, 500))
 
     normalized_drives = _normalize_drives(drives)
 
     normalized_directory = (
-        _normalize_directory(directory) if directory is not None else None
+        _normalize_directory(directory)
+        if directory is not None
+        else None
     )
 
     base_url = _get_base_url(request)
@@ -316,21 +357,9 @@ def handle_get_video_models(
         normalized_directory,
     )
 
-    # ------------------------------------------------------------
+    # ------------------------------------------------------------------------
     # TARGETED DIRECTORY REINDEX
-    #
-    # If the catalog contains no videos for specific drives and a
-    # specific directory, physically scan that directory on each
-    # requested drive before returning zero results.
-    #
-    # We intentionally require BOTH:
-    #
-    #     1. At least one specific drive
-    #     2. A specific directory
-    #
-    # This prevents a normal all-drives query from accidentally
-    # triggering a large filesystem scan.
-    # ------------------------------------------------------------
+    # ------------------------------------------------------------------------
 
     if (
         len(matching) == 0
@@ -340,7 +369,7 @@ def handle_get_video_models(
         log_separator()
         log("VIDEO MODEL REQUEST FOUND NO INDEXED VIDEOS")
         log(
-            f"--> Requesting targeted reindex: "
+            "--> Requesting targeted reindex: "
             f"drives=[{', '.join(normalized_drives)}] "
             f"directory=[{normalized_directory}]"
         )
@@ -349,7 +378,7 @@ def handle_get_video_models(
 
         for drive in normalized_drives:
             log(
-                f"--> Targeted reindex: "
+                "--> Targeted reindex: "
                 f"drive=[{drive}] "
                 f"directory=[{normalized_directory}]"
             )
@@ -372,6 +401,7 @@ def handle_get_video_models(
                 normalized_drives,
                 normalized_directory,
             )
+
         else:
             log(
                 "--> Targeted reindex found no videos on the "
@@ -383,7 +413,9 @@ def handle_get_video_models(
     if limit == 0:
         raw_chunk = matching[offset:]
     else:
-        raw_chunk = matching[offset : offset + limit]
+        raw_chunk = matching[
+            offset : offset + limit
+        ]
 
     formatted_chunk = [
         _model_to_dict(
@@ -393,7 +425,10 @@ def handle_get_video_models(
         for item in raw_chunk
     ]
 
-    next_offset = offset + len(formatted_chunk)
+    next_offset = (
+        offset + len(formatted_chunk)
+    )
+
     has_more = next_offset < total_count
 
     return JSONResponse(
@@ -433,7 +468,10 @@ def handle_search_video_models(
         A supplied directory restricts the search to that directory
         or matching subfolder.
     """
-    search_text = str(file_name or "").strip()
+
+    search_text = str(
+        file_name or ""
+    ).strip()
 
     if not search_text:
         raise HTTPException(
@@ -447,14 +485,16 @@ def handle_search_video_models(
     normalized_drives = _normalize_drives(drives)
 
     normalized_directory = (
-        _normalize_directory(directory) if directory is not None else None
+        _normalize_directory(directory)
+        if directory is not None
+        else None
     )
 
     base_url = _get_base_url(request)
 
-    # ------------------------------------------------------------
+    # ------------------------------------------------------------------------
     # GET MATCHING ITEMS BY FILENAME
-    # ------------------------------------------------------------
+    # ------------------------------------------------------------------------
 
     matching = _get_matching_video_items_by_file_name(
         search_text,
@@ -462,14 +502,18 @@ def handle_search_video_models(
         normalized_directory,
     )
 
-    # ------------------------------------------------------------
+    # ------------------------------------------------------------------------
     # FILTER OUT EXCLUDED WORDS
-    # ------------------------------------------------------------
+    # ------------------------------------------------------------------------
 
     if exclude_words:
         exclusions = [
             word.strip().casefold()
-            for word in exclude_words.replace(",", " ").split()
+            for word in (
+                exclude_words
+                .replace(",", " ")
+                .split()
+            )
             if word.strip()
         ]
 
@@ -477,7 +521,9 @@ def handle_search_video_models(
             filtered_matching = []
 
             for item in matching:
-                item_name = _get_item_file_name(item).casefold()
+                item_name = _get_item_file_name(
+                    item
+                ).casefold()
 
                 if not any(
                     exclusion in item_name
@@ -492,7 +538,9 @@ def handle_search_video_models(
     if limit == 0:
         raw_chunk = matching[offset:]
     else:
-        raw_chunk = matching[offset : offset + limit]
+        raw_chunk = matching[
+            offset : offset + limit
+        ]
 
     formatted_chunk = [
         _model_to_dict(
@@ -502,7 +550,10 @@ def handle_search_video_models(
         for item in raw_chunk
     ]
 
-    next_offset = offset + len(formatted_chunk)
+    next_offset = (
+        offset + len(formatted_chunk)
+    )
+
     has_more = next_offset < total_count
 
     drive_log_value = (
@@ -512,7 +563,7 @@ def handle_search_video_models(
     )
 
     log(
-        f"VIDEO MODEL FILENAME SEARCH: "
+        "VIDEO MODEL FILENAME SEARCH: "
         f"search=[{search_text}] "
         f"drives=[{drive_log_value}] "
         f"directory=[{normalized_directory}] "
@@ -545,6 +596,7 @@ def handle_get_video_model(
     The response contains metadata and URLs.
     The video itself is never returned by this endpoint.
     """
+
     item = _get_video_item(file_id)
 
     if not item:
@@ -583,6 +635,7 @@ def handle_get_thumbnail(
 
     The VideoModel contains only the URL to this endpoint.
     """
+
     item = _get_video_item(file_id)
 
     if not item:
@@ -620,6 +673,7 @@ def handle_move_video(
     """
     Move a video to another directory and update its catalog entry.
     """
+
     file_id = body.get("file_id") or body.get("id")
 
     target_directory = (
@@ -650,7 +704,9 @@ def handle_move_video(
             detail="Video File Not Found",
         )
 
-    target_directory = str(target_directory).strip()
+    target_directory = str(
+        target_directory
+    ).strip()
 
     if not target_directory:
         raise HTTPException(
@@ -660,20 +716,28 @@ def handle_move_video(
 
     if not os.path.isabs(target_directory):
         parent_dir = os.path.dirname(src_path)
+
         target_directory = os.path.join(
             parent_dir,
             target_directory,
         )
 
-    target_directory = os.path.abspath(target_directory)
+    target_directory = os.path.abspath(
+        target_directory
+    )
 
     try:
         os.makedirs(
             target_directory,
             exist_ok=True,
         )
+
     except OSError as ex:
-        log(f"<!> Error creating target directory: {type(ex).__name__}: {ex}")
+        log(
+            "<!> Error creating target directory: "
+            f"{type(ex).__name__}: {ex}"
+        )
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to create target directory.",
@@ -704,8 +768,13 @@ def handle_move_video(
             src_path,
             dest_path,
         )
+
     except (OSError, shutil.Error) as ex:
-        log(f"<!> Error moving video: {type(ex).__name__}: {ex}")
+        log(
+            "<!> Error moving video: "
+            f"{type(ex).__name__}: {ex}"
+        )
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to move video.",
@@ -726,8 +795,10 @@ def handle_move_video(
 
         if not relative_directory:
             relative_directory = "/"
+
         elif not relative_directory.startswith("/"):
             relative_directory = "/" + relative_directory
+
     else:
         relative_directory = (
             item.get("subfolder")
@@ -757,7 +828,9 @@ def handle_move_video(
 
         config.FILE_MAP[new_id] = updated_model
 
-        for index, catalog_item in enumerate(config.FILES_LIST):
+        for index, catalog_item in enumerate(
+            config.FILES_LIST
+        ):
             if catalog_item.get("id") == file_id:
                 config.FILES_LIST[index] = updated_model
                 break
@@ -781,6 +854,7 @@ def handle_rename_video(
     """
     Rename a video and update its catalog entry.
     """
+
     file_id = body.get("file_id") or body.get("id")
 
     new_name = (
@@ -822,8 +896,12 @@ def handle_rename_video(
     supplied_ext = os.path.splitext(new_name)[1]
 
     if supplied_ext:
-        new_name_without_extension = os.path.splitext(new_name)[0]
+        new_name_without_extension = os.path.splitext(
+            new_name
+        )[0]
+
         dest_filename = new_name
+
     else:
         new_name_without_extension = new_name
         dest_filename = new_name + ext
@@ -857,8 +935,13 @@ def handle_rename_video(
             src_path,
             dest_path,
         )
+
     except OSError as ex:
-        log(f"<!> Error renaming video: {type(ex).__name__}: {ex}")
+        log(
+            "<!> Error renaming video: "
+            f"{type(ex).__name__}: {ex}"
+        )
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to rename video.",
@@ -890,7 +973,9 @@ def handle_rename_video(
 
         config.FILE_MAP[new_id] = updated_model
 
-        for index, catalog_item in enumerate(config.FILES_LIST):
+        for index, catalog_item in enumerate(
+            config.FILES_LIST
+        ):
             if catalog_item.get("id") == file_id:
                 config.FILES_LIST[index] = updated_model
                 break
@@ -914,6 +999,7 @@ def handle_delete_video(
     """
     Delete a video from physical storage and remove it from the catalog.
     """
+
     item = _get_video_item(file_id)
 
     if not item:
@@ -930,21 +1016,27 @@ def handle_delete_video(
     if src_path and os.path.exists(src_path):
         try:
             os.remove(src_path)
+
         except PermissionError:
             return JSONResponse(
                 {
                     "success": False,
-                    "error": "Permission denied when deleting video.",
+                    "error": (
+                        "Permission denied when deleting video."
+                    ),
                 },
                 status_code=status.HTTP_403_FORBIDDEN,
             )
+
         except FileNotFoundError:
             pass
+
         except OSError as ex:
             log(
-                f"<!> Error deleting video: "
+                "<!> Error deleting video: "
                 f"{type(ex).__name__}: {ex}"
             )
+
             return JSONResponse(
                 {
                     "success": False,
