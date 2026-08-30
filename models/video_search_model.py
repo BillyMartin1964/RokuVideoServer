@@ -170,20 +170,14 @@ class VideoSearchModel:
             A new VideoSearchModel.
         """
 
-        normalized_drives: list[str] = []
-
-        for drive in drives or []:
-            normalized_drive = str(drive).strip()
-
-            if normalized_drive:
-                normalized_drives.append(normalized_drive)
-
         model = cls(
             search_text=str(search_text or "").strip(),
             include_terms=list(include_terms or []),
             exclude_terms=list(exclude_terms or []),
             field=field,
-            drives=normalized_drives,
+            drives=[
+                str(drive).strip() for drive in (drives or []) if str(drive).strip()
+            ],
             directory=(str(directory).strip() if directory is not None else None),
             offset=max(0, offset),
             limit=max(0, min(limit, 500)),
@@ -210,17 +204,12 @@ class VideoSearchModel:
         An omitted or None drives value means that the search is not
         restricted to specific drives.
         """
-
         search_text = str(file_name or "").strip()
 
         norm_field = str(search_field or "").strip().lower()
-
         if norm_field == "title":
             target_field = VideoSearchField.TITLE
-        elif norm_field in (
-            "title_and_filename",
-            "titleandfilename",
-        ):
+        elif norm_field in ("title_and_filename", "titleandfilename"):
             target_field = VideoSearchField.TITLE_AND_FILENAME
         else:
             target_field = VideoSearchField.FILENAME
@@ -230,7 +219,6 @@ class VideoSearchModel:
 
         if search_text:
             tokens = search_text.split()
-
             for token in tokens:
                 if token.startswith("-") and len(token) > 1:
                     exc_terms.append(token[1:])
@@ -240,7 +228,6 @@ class VideoSearchModel:
         if exclude_words:
             for word in str(exclude_words).replace(",", " ").split():
                 cleaned = word.strip().lstrip("-")
-
                 if cleaned:
                     exc_terms.append(cleaned)
 
@@ -325,16 +312,3 @@ class VideoSearchModel:
         self.exclude_terms = [
             term.strip() for term in self.exclude_terms if term.strip()
         ]
-
-        normalized_drives: list[str] = []
-
-        for drive in self.drives:
-            normalized_drive = drive.strip()
-
-            if normalized_drive:
-                normalized_drives.append(normalized_drive)
-
-        self.drives = normalized_drives
-
-        if self.directory is not None:
-            self.directory = self.directory.strip()
