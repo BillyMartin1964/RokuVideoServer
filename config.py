@@ -11,8 +11,8 @@ PORT = 8001
 VOLUMES_DIR = "/Volumes"
 
 # Cache Directories & Files
-THUMB_CACHE_DIR = "/tmp/roku_thumbs"
-FILE_CACHE_FILE = "/tmp/roku_files_cache.json"
+THUMB_CACHE_DIR = "/Volumes/ExtData/RokuTemp/roku_thumbs"
+FILE_CACHE_FILE = "/Volumes/ExtData/RokuTemp/roku_files_cache.json"
 DEFAULT_POSTER_FILE = os.path.join(THUMB_CACHE_DIR, "default_poster.jpg")
 PLAYBACK_POSITIONS_FILE = os.path.join(
     os.path.dirname(__file__), "data", "playback.json"
