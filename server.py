@@ -637,9 +637,16 @@ def move_video(
     body: MoveVideoRequest,
 ):
     """Move a video to another directory."""
+    payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+    # provide both snake_case and camelCase keys for downstream compatibility
+    if "file_id" in payload and "fileId" not in payload:
+        payload["fileId"] = payload["file_id"]
+    if "target_directory" in payload and "targetDirectory" not in payload:
+        payload["targetDirectory"] = payload["target_directory"]
+
     return api_video_models.handle_move_video(
         request,
-        body.model_dump() if hasattr(body, "model_dump") else body.dict(),
+        payload,
     )
 
 
@@ -652,9 +659,15 @@ def rename_video(
     body: RenameVideoRequest,
 ):
     """Rename a video."""
+    payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+    if "file_id" in payload and "fileId" not in payload:
+        payload["fileId"] = payload["file_id"]
+    if "new_name" in payload and "newName" not in payload:
+        payload["newName"] = payload["new_name"]
+
     return api_video_models.handle_rename_video(
         request,
-        body.model_dump() if hasattr(body, "model_dump") else body.dict(),
+        payload,
     )
 
 
