@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""Modified on 9/1/2026"""
+
 import os
 import socket
 import threading
@@ -417,7 +419,7 @@ def get_video_models(
     )
 
 
-# --------------------------------------------------------------------------
+# ============================================================================
 # VIDEO MODEL SEARCH
 #
 # This route MUST appear before /api/video-models/{file_id}.
@@ -425,7 +427,7 @@ def get_video_models(
 # FastAPI evaluates path operations in declaration order, so the
 # fixed "search" segment must be registered before the generic
 # single-value path parameter.
-# --------------------------------------------------------------------------
+# ============================================================================
 
 
 @app.get(
@@ -595,8 +597,8 @@ def get_video_model(
     """
     Return the complete VideoModel for one video.
 
-    The response contains metadata and URLs for the thumbnail
-    and video stream. The video itself is not returned.
+    The response contains metadata and URLs for the
+    thumbnail and video stream. The video itself is not returned.
     """
     return api_video_models.handle_get_video_model(
         request,
@@ -636,11 +638,13 @@ def move_video(
     request: Request,
     body: MoveVideoRequest,
 ):
-    """Move a video to another directory."""
+    """Move a video to an existing directory."""
     payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
-    # provide both snake_case and camelCase keys for downstream compatibility
+
+    # Provide both snake_case and camelCase keys for downstream compatibility.
     if "file_id" in payload and "fileId" not in payload:
         payload["fileId"] = payload["file_id"]
+
     if "target_directory" in payload and "targetDirectory" not in payload:
         payload["targetDirectory"] = payload["target_directory"]
 
@@ -660,8 +664,10 @@ def rename_video(
 ):
     """Rename a video."""
     payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+
     if "file_id" in payload and "fileId" not in payload:
         payload["fileId"] = payload["file_id"]
+
     if "new_name" in payload and "newName" not in payload:
         payload["newName"] = payload["new_name"]
 

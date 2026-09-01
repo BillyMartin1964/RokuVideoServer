@@ -1,6 +1,8 @@
 import os
 import shutil
 
+"""Modified on 9/1/2026"""
+
 from fastapi import HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -645,17 +647,23 @@ def handle_move_video(
     body: dict,
 ):
     """
-    Move a video to another directory and update its catalog entry.
+    Move a video to an existing directory and update its catalog entry.
+
+    This operation NEVER creates a directory.
+
+    The target directory must already exist. If it does not exist,
+    the response identifies both the exact value supplied by the client
+    and the exact filesystem path resolved by the server.
     """
     file_id = body.get("file_id") or body.get("id")
 
-    target_directory = (
+    target_directory_input = (
         body.get("target_directory")
         or body.get("targetDirectory")
         or body.get("targetFolder")
     )
 
-    if not file_id or not target_directory:
+    if not file_id or not target_directory_input:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Video ID and target directory are required.",
@@ -677,40 +685,136 @@ def handle_move_video(
             detail="Video File Not Found",
         )
 
-    target_directory = str(target_directory).strip()
+    target_directory_input = str(target_directory_input).strip()
 
-    if not target_directory:
+    if not target_directory_input:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Target directory cannot be empty.",
         )
 
-    if not os.path.isabs(target_directory):
+    # ------------------------------------------------------------
+    # RESOLVE THE CLIENT'S TARGET DIRECTORY
+    #
+    # IMPORTANT:
+    # We do NOT create the directory.
+    #
+    # The Roku application is selecting an existing directory.
+    # We therefore resolve the requested value and then verify that
+    # the resulting filesystem path already exists.
+    # ------------------------------------------------------------
+
+    volumes_root = getattr(config, "VOLUMES_DIR", "/Volumes")
+
+    td = target_directory_input
+
+    if td.startswith(volumes_root):
+        resolved = td
+
+    elif td.startswith("/"):
+        # Could be "/DriveName/..." -> map to "/Volumes/DriveName/..."
+        parts = td.strip("/").split("/", 1)
+        drive_candidate = parts[0]
+        remainder = parts[1] if len(parts) > 1 else ""
+
+        candidate_root = os.path.join(
+            volumes_root,
+            drive_candidate,
+        )
+
+        if os.path.isdir(candidate_root):
+            resolved = (
+                os.path.join(candidate_root, remainder) if remainder else candidate_root
+            )
+        else:
+            # Treat leading-slash paths without a matching volume as
+            # relative to the current item's drive.
+            current_drive = str(item.get("drive", "") or "").strip()
+
+            if current_drive:
+                resolved = os.path.join(
+                    volumes_root,
+                    current_drive,
+                    td.lstrip("/"),
+                )
+            else:
+                parent_dir = os.path.dirname(src_path)
+
+                resolved = os.path.join(
+                    parent_dir,
+                    td.lstrip("/"),
+                )
+
+    elif not os.path.isabs(td):
+        # Relative path: resolve against the source file's parent directory.
         parent_dir = os.path.dirname(src_path)
-        target_directory = os.path.join(
+
+        resolved = os.path.join(
             parent_dir,
-            target_directory,
+            td,
         )
 
-    target_directory = os.path.abspath(target_directory)
+    else:
+        # Absolute path that doesn't start with volumes_root: keep as-is.
+        resolved = td
 
-    try:
-        os.makedirs(
-            target_directory,
-            exist_ok=True,
-        )
-    except OSError as ex:
-        log(f"<!> Error creating target directory: {type(ex).__name__}: {ex}")
+    target_directory = os.path.abspath(resolved)
+
+    # ------------------------------------------------------------
+    # LOG EXACT TARGET RESOLUTION
+    # ------------------------------------------------------------
+
+    log_separator()
+    log("VIDEO MOVE TARGET DIRECTORY VALIDATION")
+    log(f"--> Video ID: [{file_id}]")
+    log(f"--> Source video: [{src_path}]")
+    log(f"--> Requested target: [{target_directory_input}]")
+    log(f"--> Resolved target: [{target_directory}]")
+
+    # ------------------------------------------------------------
+    # TARGET DIRECTORY MUST ALREADY EXIST
+    #
+    # DO NOT CREATE IT.
+    # ------------------------------------------------------------
+
+    if not os.path.exists(target_directory):
+        log(f"<!> Target directory does not exist: [{target_directory}]")
 
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to create target directory.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Target directory does not exist. "
+                f"Requested: [{target_directory_input}]. "
+                f"Resolved path: [{target_directory}]."
+            ),
         )
+
+    # ------------------------------------------------------------
+    # TARGET PATH EXISTS BUT IS NOT A DIRECTORY
+    # ------------------------------------------------------------
+
+    if not os.path.isdir(target_directory):
+        log(f"<!> Target path exists but is not a directory: [{target_directory}]")
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Target path exists but is not a directory. "
+                f"Requested: [{target_directory_input}]. "
+                f"Resolved path: [{target_directory}]."
+            ),
+        )
+
+    # ------------------------------------------------------------
+    # DESTINATION FILE
+    # ------------------------------------------------------------
 
     dest_path = os.path.join(
         target_directory,
         os.path.basename(src_path),
     )
+
+    log(f"--> Destination video path: [{dest_path}]")
 
     if os.path.abspath(src_path) == os.path.abspath(dest_path):
         raise HTTPException(
@@ -718,24 +822,51 @@ def handle_move_video(
             detail="Video is already in the target directory.",
         )
 
+    # ------------------------------------------------------------
+    # DESTINATION FILE ALREADY EXISTS
+    # ------------------------------------------------------------
+
     if os.path.exists(dest_path):
+        log(f"<!> Destination video already exists: [{dest_path}]")
+
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=("A video with that name already exists in the target directory."),
+            detail=(
+                "A video with that name already exists in the target directory. "
+                f"Destination: [{dest_path}]."
+            ),
         )
+
+    # ------------------------------------------------------------
+    # MOVE THE VIDEO
+    # ------------------------------------------------------------
 
     try:
         shutil.move(
             src_path,
             dest_path,
         )
+
     except (OSError, shutil.Error) as ex:
         log(f"<!> Error moving video: {type(ex).__name__}: {ex}")
 
+        log(f"--> Source: [{src_path}]")
+
+        log(f"--> Destination: [{dest_path}]")
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to move video.",
+            detail=(
+                "Unable to move video. "
+                f"Source: [{src_path}]. "
+                f"Destination: [{dest_path}]. "
+                f"Error: {type(ex).__name__}: {ex}"
+            ),
         )
+
+    # ------------------------------------------------------------
+    # UPDATE VIDEO MODEL
+    # ------------------------------------------------------------
 
     base_url = _get_base_url(request)
 
@@ -750,8 +881,10 @@ def handle_move_video(
 
         if not relative_directory:
             relative_directory = "/"
+
         elif not relative_directory.startswith("/"):
             relative_directory = "/" + relative_directory
+
     else:
         relative_directory = item.get("subfolder") or item.get("directory") or ""
 
@@ -769,6 +902,10 @@ def handle_move_video(
         base_url,
     )
 
+    # ------------------------------------------------------------
+    # UPDATE CATALOG
+    # ------------------------------------------------------------
+
     with CACHE_LOCK:
         config.FILE_MAP.pop(
             file_id,
@@ -783,6 +920,15 @@ def handle_move_video(
                 break
 
     save_disk_cache()
+
+    log_separator()
+    log("VIDEO MOVE COMPLETED SUCCESSFULLY")
+    log(f"--> Original ID: [{file_id}]")
+    log(f"--> New ID: [{new_id}]")
+    log(f"--> Source: [{src_path}]")
+    log(f"--> Destination: [{dest_path}]")
+    log(f"--> Directory: [{target_directory}]")
+    log_separator()
 
     return JSONResponse(
         {
@@ -873,6 +1019,7 @@ def handle_rename_video(
             src_path,
             dest_path,
         )
+
     except OSError as ex:
         log(f"<!> Error renaming video: {type(ex).__name__}: {ex}")
 
@@ -947,6 +1094,7 @@ def handle_delete_video(
     if src_path and os.path.exists(src_path):
         try:
             os.remove(src_path)
+
         except PermissionError:
             return JSONResponse(
                 {
@@ -955,8 +1103,10 @@ def handle_delete_video(
                 },
                 status_code=status.HTTP_403_FORBIDDEN,
             )
+
         except FileNotFoundError:
             pass
+
         except OSError as ex:
             log(f"<!> Error deleting video: {type(ex).__name__}: {ex}")
 
