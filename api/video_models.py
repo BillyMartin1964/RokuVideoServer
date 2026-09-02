@@ -1,7 +1,7 @@
 import os
 import shutil
 
-"""Modified on 9/1/2026"""
+"""Modified on 9/2/2026"""
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse
@@ -14,6 +14,11 @@ from services.video_service import (
     ensure_directory_indexed,
     get_file_id,
     save_disk_cache,
+)
+from utilities.video_model_search_utils import (
+    calculate_filename_match_score,
+    filename_matches_search,
+    normalize_filename,
 )
 
 
@@ -279,7 +284,13 @@ def _get_matching_video_items_by_file_name(
     This function only examines the existing catalog. It does not
     perform a filesystem scan.
     """
-    search_text = str(file_name or "").strip().casefold()
+    """
+    Return catalog items whose filenames contain the supplied search text.
+
+    Uses the utilities in `utilities.video_model_search_utils` to perform
+    flexible, order-independent, and partial-term matching.
+    """
+    search_text = str(file_name or "").strip()
 
     if not search_text:
         return []
@@ -289,7 +300,7 @@ def _get_matching_video_items_by_file_name(
         directory,
     )
 
-    matching = []
+    scored_matches: list[tuple[int, str, dict]] = []
 
     for item in candidate_items:
         item_file_name = _get_item_file_name(item)
@@ -297,10 +308,15 @@ def _get_matching_video_items_by_file_name(
         if not item_file_name:
             continue
 
-        if search_text in item_file_name.casefold():
-            matching.append(item)
+        if filename_matches_search(item_file_name, search_text):
+            score = calculate_filename_match_score(item_file_name, search_text)
+            norm = normalize_filename(item_file_name)
+            scored_matches.append((score, norm, item))
 
-    return matching
+    # Sort by descending score, then by normalized filename for deterministic ordering
+    scored_matches.sort(key=lambda t: (-t[0], t[1]))
+
+    return [t[2] for t in scored_matches]
 
 
 def handle_get_video_models(
