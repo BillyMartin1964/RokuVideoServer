@@ -1,13 +1,32 @@
-`.venv/
+# Python virtual environments
+.venv/
 venv/
+
+# Environment files
 .env
+
+# Log files
 *.log
+*.log.*
+*.log-*
+*.log_*
+
+# macOS
 .DS_Store
+
+# Python cache
 __pycache__/
-*.pyc
+*.py[cod]
+
+# Build output
 /build/
 /dist/
+
+# Application data
 data/*.json
-z:\\Documents\\RokuVideoServer\\*.bak
+
+# Backup files
+*.bak
+
+# VS Code
 .vscode/
-`
