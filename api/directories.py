@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
+import config
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -92,8 +93,7 @@ def _get_drive_path(drive_name: str) -> Path:
     Example:
         "Vids2" -> /Volumes/Vids2
     """
-
-    return Path("/Volumes") / drive_name.strip()
+    return Path(config.VOLUMES_DIR) / drive_name.strip()
 
 
 def _get_directory_path(
@@ -306,7 +306,7 @@ def handle_get_all_directories(request: Request):
 
     del request
 
-    volumes_path = Path("/Volumes")
+    volumes_path = Path(config.VOLUMES_DIR)
     directory_list = []
 
     if not volumes_path.exists() or not volumes_path.is_dir():
