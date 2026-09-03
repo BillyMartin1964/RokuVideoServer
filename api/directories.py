@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
-import config
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+import config
 from models.directory_model import DirectoryModel
 
 # ============================================================================

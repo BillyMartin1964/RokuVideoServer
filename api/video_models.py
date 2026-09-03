@@ -1,7 +1,7 @@
 import os
 import shutil
 
-"""Modified on 9/2/2026"""
+"""Modified on 9/3/2026"""
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse
@@ -284,12 +284,6 @@ def _get_matching_video_items_by_file_name(
     This function only examines the existing catalog. It does not
     perform a filesystem scan.
     """
-    """
-    Return catalog items whose filenames contain the supplied search text.
-
-    Uses the utilities in `utilities.video_model_search_utils` to perform
-    flexible, order-independent, and partial-term matching.
-    """
     search_text = str(file_name or "").strip()
 
     if not search_text:
@@ -317,6 +311,403 @@ def _get_matching_video_items_by_file_name(
     scored_matches.sort(key=lambda t: (-t[0], t[1]))
 
     return [t[2] for t in scored_matches]
+
+
+def _get_volume_name_from_path(
+    path: str,
+    volumes_root: str,
+) -> str:
+    """
+    Return the mounted volume name represented by a filesystem path.
+
+    Example:
+
+        /Volumes/Vids/0A
+            -> Vids
+
+        /Volumes/Vids2/Destination
+            -> Vids2
+
+    Returns an empty string when the path is not underneath the
+    configured volumes root.
+    """
+    try:
+        normalized_root = os.path.abspath(volumes_root)
+        normalized_path = os.path.abspath(path)
+
+        relative_path = os.path.relpath(
+            normalized_path,
+            normalized_root,
+        )
+
+        if relative_path == os.pardir or relative_path.startswith(os.pardir + os.sep):
+            return ""
+
+        parts = relative_path.split(os.sep)
+
+        if not parts or parts[0] in ("", "."):
+            return ""
+
+        volume_name = _normalize_drive(parts[0])
+
+        if not volume_name:
+            return ""
+
+        volume_root = os.path.join(
+            normalized_root,
+            volume_name,
+        )
+
+        if not os.path.isdir(volume_root):
+            return ""
+
+        return volume_name
+
+    except (OSError, ValueError):
+        return ""
+
+
+def _find_directory_on_volumes(
+    directory_input: str,
+    volumes_root: str,
+) -> list[tuple[str, str]]:
+    """
+    Search every mounted volume for an existing target directory.
+
+    The search is intentionally limited to directories directly beneath
+    VOLUMES_DIR. It never creates directories.
+
+    Examples:
+
+        /0A
+            searches:
+                /Volumes/Vids/0A
+                /Volumes/Vids2/0A
+                /Volumes/Movies/0A
+                ...
+
+        0A
+            searches the same locations.
+
+        /Some/Nested/Folder
+            searches:
+                /Volumes/Vids/Some/Nested/Folder
+                /Volumes/Vids2/Some/Nested/Folder
+                ...
+
+    Returns:
+        A list of:
+            (volume_name, absolute_directory_path)
+    """
+    normalized_directory = str(directory_input or "").strip()
+
+    normalized_directory = normalized_directory.replace(
+        "\\",
+        "/",
+    ).strip("/")
+
+    if not normalized_directory:
+        return []
+
+    # Reject traversal before joining anything to a volume root.
+    directory_parts = [part for part in normalized_directory.split("/") if part]
+
+    if any(part in (".", "..") for part in directory_parts):
+        return []
+
+    if not os.path.isdir(volumes_root):
+        return []
+
+    matches: list[tuple[str, str]] = []
+
+    try:
+        volume_names = sorted(
+            os.listdir(volumes_root),
+            key=lambda value: value.casefold(),
+        )
+
+    except OSError:
+        return []
+
+    for volume_name in volume_names:
+        volume_name = _normalize_drive(volume_name)
+
+        if not volume_name:
+            continue
+
+        volume_root = os.path.abspath(
+            os.path.join(
+                volumes_root,
+                volume_name,
+            )
+        )
+
+        if not os.path.isdir(volume_root):
+            continue
+
+        candidate = os.path.abspath(
+            os.path.join(
+                volume_root,
+                *directory_parts,
+            )
+        )
+
+        try:
+            common_path = os.path.commonpath(
+                [
+                    volume_root,
+                    candidate,
+                ]
+            )
+
+        except ValueError:
+            continue
+
+        if common_path != volume_root:
+            continue
+
+        if os.path.isdir(candidate):
+            matches.append(
+                (
+                    volume_name,
+                    candidate,
+                )
+            )
+
+    return matches
+
+
+def _resolve_move_target_directory(
+    item: dict,
+    target_directory_input: str,
+    volumes_root: str,
+):
+    """
+    Resolve the requested move destination to a real filesystem directory.
+
+    Resolution rules:
+
+    1. A full physical path beginning with VOLUMES_DIR is accepted.
+
+    2. A path such as /Vids/0A is interpreted as:
+           /Volumes/Vids/0A
+       when Vids is an actual mounted volume.
+
+    3. A drive-independent path such as /0A or 0A is searched across
+       all mounted volumes.
+
+       Exactly one match:
+           use it.
+
+       Multiple matches:
+           reject the request rather than guessing.
+
+       No matches:
+           return no result.
+
+    4. A relative path is resolved relative to the source video's
+       parent directory.
+
+    IMPORTANT:
+        A leading slash by itself does NOT mean "use the source drive."
+        That was the source of the Vids/Vids2 move problem.
+    """
+    td = str(target_directory_input or "").strip()
+
+    if not td:
+        return None, ""
+
+    td_normalized = td.replace("\\", "/")
+
+    normalized_volumes_root = (
+        os.path.abspath(volumes_root).replace("\\", "/").rstrip("/")
+    )
+
+    # ------------------------------------------------------------
+    # FULL PHYSICAL PATH
+    #
+    # Example:
+    #   /Volumes/Vids/0A
+    # ------------------------------------------------------------
+
+    if td_normalized == normalized_volumes_root:
+        resolved = normalized_volumes_root
+
+        return (
+            os.path.abspath(resolved),
+            _get_volume_name_from_path(
+                resolved,
+                volumes_root,
+            ),
+        )
+
+    if td_normalized.startswith(normalized_volumes_root + "/"):
+        resolved = td_normalized
+
+        return (
+            os.path.abspath(resolved),
+            _get_volume_name_from_path(
+                resolved,
+                volumes_root,
+            ),
+        )
+
+    # ------------------------------------------------------------
+    # LEADING-SLASH PATH
+    #
+    # Example:
+    #   /Vids/0A
+    #
+    # First determine whether the first component is actually a
+    # mounted volume. If it is, use it directly.
+    #
+    # Otherwise this is drive-independent, such as:
+    #   /0A
+    #
+    # In that case SEARCH ALL VOLUMES.
+    # ------------------------------------------------------------
+
+    if td_normalized.startswith("/"):
+        stripped = td_normalized.strip("/")
+
+        if not stripped:
+            return None, ""
+
+        parts = stripped.split(
+            "/",
+            1,
+        )
+
+        first_component = _normalize_drive(parts[0])
+
+        remainder = parts[1] if len(parts) > 1 else ""
+
+        candidate_root = os.path.abspath(
+            os.path.join(
+                volumes_root,
+                first_component,
+            )
+        )
+
+        # /Vids/0A where Vids is actually mounted.
+        if first_component and os.path.isdir(candidate_root):
+            if remainder:
+                directory_parts = [part for part in remainder.split("/") if part]
+
+                if any(part in (".", "..") for part in directory_parts):
+                    return None, ""
+
+                resolved = os.path.abspath(
+                    os.path.join(
+                        candidate_root,
+                        *directory_parts,
+                    )
+                )
+
+            else:
+                resolved = candidate_root
+
+            try:
+                if (
+                    os.path.commonpath(
+                        [
+                            candidate_root,
+                            resolved,
+                        ]
+                    )
+                    != candidate_root
+                ):
+                    return None, ""
+
+            except ValueError:
+                return None, ""
+
+            return (
+                resolved,
+                first_component,
+            )
+
+        # /0A, /Favorites, /Movies/0A, etc.
+        #
+        # This is NOT relative to the source drive.
+        search_directory = stripped
+
+        matches = _find_directory_on_volumes(
+            search_directory,
+            volumes_root,
+        )
+
+        if len(matches) == 1:
+            volume_name, resolved = matches[0]
+
+            return (
+                resolved,
+                volume_name,
+            )
+
+        if len(matches) > 1:
+            match_text = ", ".join(volume_name for volume_name, _ in matches)
+
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Target directory is ambiguous. "
+                    f"Directory [{target_directory_input}] "
+                    f"exists on multiple drives: [{match_text}]. "
+                    "Specify the destination drive."
+                ),
+            )
+
+        return None, ""
+
+    # ------------------------------------------------------------
+    # RELATIVE PATH
+    #
+    # Example:
+    #   0A
+    #
+    # This retains the original behavior and resolves relative to
+    # the video's current directory.
+    # ------------------------------------------------------------
+
+    if not os.path.isabs(td):
+        parent_dir = os.path.dirname(_get_video_path(item))
+
+        directory_parts = [part for part in td_normalized.split("/") if part]
+
+        if any(part in (".", "..") for part in directory_parts):
+            return None, ""
+
+        resolved = os.path.abspath(
+            os.path.join(
+                parent_dir,
+                *directory_parts,
+            )
+        )
+
+        current_drive = _normalize_drive(item.get("drive", ""))
+
+        return (
+            resolved,
+            current_drive,
+        )
+
+    # ------------------------------------------------------------
+    # OTHER ABSOLUTE PATH
+    #
+    # Keep the original absolute-path behavior, but determine the
+    # actual volume when possible.
+    # ------------------------------------------------------------
+
+    resolved = os.path.abspath(td)
+
+    return (
+        resolved,
+        _get_volume_name_from_path(
+            resolved,
+            volumes_root,
+        ),
+    )
 
 
 def handle_get_video_models(
@@ -374,14 +765,6 @@ def handle_get_video_models(
 
     # ------------------------------------------------------------
     # TARGETED DIRECTORY REINDEX
-    #
-    # If the catalog contains no videos for a specific drive
-    # directory, physically scan that directory before returning
-    # zero results.
-    #
-    # We intentionally require BOTH drive and directory so that a
-    # normal query without filters cannot accidentally trigger a
-    # large filesystem scan.
     # ------------------------------------------------------------
 
     if len(matching) == 0 and normalized_drive and normalized_directory is not None:
@@ -503,9 +886,6 @@ def handle_search_video_models(
 
     # ------------------------------------------------------------
     # SEARCH BY FILENAME
-    #
-    # Drive filtering is performed here, not in the normal
-    # VideoGrid VideoModel retrieval endpoint.
     # ------------------------------------------------------------
 
     matching = _get_matching_video_items_by_file_name(
@@ -667,9 +1047,23 @@ def handle_move_video(
 
     This operation NEVER creates a directory.
 
-    The target directory must already exist. If it does not exist,
-    the response identifies both the exact value supplied by the client
-    and the exact filesystem path resolved by the server.
+    Target directory resolution supports:
+
+        /Volumes/Vids/0A
+            Full physical path.
+
+        /Vids/0A
+            Explicit volume plus directory.
+
+        /0A
+            Drive-independent directory. The server searches all
+            mounted volumes and uses the unique matching directory.
+
+        0A
+            Relative directory on the video's current drive.
+
+    A drive-independent directory is never automatically attached
+    to the source video's drive.
     """
     file_id = body.get("file_id") or body.get("id")
 
@@ -677,6 +1071,17 @@ def handle_move_video(
         body.get("target_directory")
         or body.get("targetDirectory")
         or body.get("targetFolder")
+    )
+
+    # Accept an explicit destination drive if the client supplies one.
+    #
+    # This is intentionally optional so the current Roku client does
+    # not have to be changed just to make the move operation work.
+    target_drive_input = (
+        body.get("target_drive")
+        or body.get("targetDrive")
+        or body.get("destination_drive")
+        or body.get("destinationDrive")
     )
 
     if not file_id or not target_directory_input:
@@ -709,83 +1114,171 @@ def handle_move_video(
             detail="Target directory cannot be empty.",
         )
 
-    # ------------------------------------------------------------
-    # RESOLVE THE CLIENT'S TARGET DIRECTORY
-    #
-    # IMPORTANT:
-    # We do NOT create the directory.
-    #
-    # The Roku application is selecting an existing directory.
-    # We therefore resolve the requested value and then verify that
-    # the resulting filesystem path already exists.
-    # ------------------------------------------------------------
+    target_drive = _normalize_drive(target_drive_input)
 
-    volumes_root = getattr(config, "VOLUMES_DIR", "/Volumes")
+    volumes_root = getattr(
+        config,
+        "VOLUMES_DIR",
+        "/Volumes",
+    )
 
-    td = target_directory_input
-
-    if td.startswith(volumes_root):
-        resolved = td
-
-    elif td.startswith("/"):
-        # Could be "/DriveName/..." -> map to "/Volumes/DriveName/..."
-        parts = td.strip("/").split("/", 1)
-        drive_candidate = parts[0]
-        remainder = parts[1] if len(parts) > 1 else ""
-
-        candidate_root = os.path.join(
-            volumes_root,
-            drive_candidate,
-        )
-
-        if os.path.isdir(candidate_root):
-            resolved = (
-                os.path.join(candidate_root, remainder) if remainder else candidate_root
-            )
-        else:
-            # Treat leading-slash paths without a matching volume as
-            # relative to the current item's drive.
-            current_drive = str(item.get("drive", "") or "").strip()
-
-            if current_drive:
-                resolved = os.path.join(
-                    volumes_root,
-                    current_drive,
-                    td.lstrip("/"),
-                )
-            else:
-                parent_dir = os.path.dirname(src_path)
-
-                resolved = os.path.join(
-                    parent_dir,
-                    td.lstrip("/"),
-                )
-
-    elif not os.path.isabs(td):
-        # Relative path: resolve against the source file's parent directory.
-        parent_dir = os.path.dirname(src_path)
-
-        resolved = os.path.join(
-            parent_dir,
-            td,
-        )
-
-    else:
-        # Absolute path that doesn't start with volumes_root: keep as-is.
-        resolved = td
-
-    target_directory = os.path.abspath(resolved)
+    volumes_root = os.path.abspath(str(volumes_root))
 
     # ------------------------------------------------------------
-    # LOG EXACT TARGET RESOLUTION
+    # LOG REQUEST
     # ------------------------------------------------------------
 
     log_separator()
     log("VIDEO MOVE TARGET DIRECTORY VALIDATION")
     log(f"--> Video ID: [{file_id}]")
     log(f"--> Source video: [{src_path}]")
+    log(f"--> Source drive: [{_normalize_drive(item.get('drive', ''))}]")
     log(f"--> Requested target: [{target_directory_input}]")
+    log(f"--> Requested target drive: [{target_drive}]")
+
+    # ------------------------------------------------------------
+    # EXPLICIT DESTINATION DRIVE
+    #
+    # When the client supplies a destination drive, resolve the
+    # directory against that drive. This takes priority over any
+    # source-drive information in the catalog.
+    # ------------------------------------------------------------
+
+    if target_drive:
+        destination_volume_root = os.path.abspath(
+            os.path.join(
+                volumes_root,
+                target_drive,
+            )
+        )
+
+        if not os.path.isdir(destination_volume_root):
+            log(f"<!> Destination drive does not exist: [{destination_volume_root}]")
+
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    "Destination drive does not exist. "
+                    f"Drive: [{target_drive}]. "
+                    f"Resolved path: [{destination_volume_root}]."
+                ),
+            )
+
+        td = target_directory_input.replace(
+            "\\",
+            "/",
+        ).strip()
+
+        # A full physical path was supplied.
+        normalized_root = destination_volume_root.replace(
+            "\\",
+            "/",
+        ).rstrip("/")
+
+        if td == normalized_root or td.startswith(normalized_root + "/"):
+            resolved = os.path.abspath(td)
+
+        else:
+            # Strip any leading slash because the drive is already
+            # explicitly known.
+            relative_directory = td.strip("/")
+
+            if relative_directory:
+                directory_parts = [
+                    part for part in relative_directory.split("/") if part
+                ]
+            else:
+                directory_parts = []
+
+            if any(part in (".", "..") for part in directory_parts):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Target directory contains an invalid path.",
+                )
+
+            resolved = os.path.abspath(
+                os.path.join(
+                    destination_volume_root,
+                    *directory_parts,
+                )
+            )
+
+        try:
+            if (
+                os.path.commonpath(
+                    [
+                        destination_volume_root,
+                        resolved,
+                    ]
+                )
+                != destination_volume_root
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Target directory is outside the destination drive.",
+                )
+
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Target directory is invalid.",
+            )
+
+        target_directory = resolved
+        resolved_drive = target_drive
+
+    else:
+        # --------------------------------------------------------
+        # NORMAL RESOLUTION
+        #
+        # This handles:
+        #
+        #   /0A
+        #   /Vids/0A
+        #   0A
+        #   /Volumes/Vids/0A
+        #
+        # Crucially, /0A is searched across all mounted volumes.
+        # --------------------------------------------------------
+
+        target_directory, resolved_drive = _resolve_move_target_directory(
+            item,
+            target_directory_input,
+            volumes_root,
+        )
+
+        if target_directory is None:
+            log("<!> Target directory could not be resolved on any mounted volume.")
+
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    "Target directory does not exist on any mounted volume. "
+                    f"Requested: [{target_directory_input}]."
+                ),
+            )
+
+    target_directory = os.path.abspath(target_directory)
+
+    # ------------------------------------------------------------
+    # DETERMINE ACTUAL DESTINATION DRIVE
+    #
+    # This protects the catalog update even if resolution came from
+    # a physical path rather than an explicit drive.
+    # ------------------------------------------------------------
+
+    actual_destination_drive = _get_volume_name_from_path(
+        target_directory,
+        volumes_root,
+    )
+
+    if actual_destination_drive:
+        resolved_drive = actual_destination_drive
+
+    resolved_drive = _normalize_drive(resolved_drive)
+
     log(f"--> Resolved target: [{target_directory}]")
+    log(f"--> Resolved destination drive: [{resolved_drive}]")
 
     # ------------------------------------------------------------
     # TARGET DIRECTORY MUST ALREADY EXIST
@@ -867,7 +1360,6 @@ def handle_move_video(
         log(f"<!> Error moving video: {type(ex).__name__}: {ex}")
 
         log(f"--> Source: [{src_path}]")
-
         log(f"--> Destination: [{dest_path}]")
 
         raise HTTPException(
@@ -888,21 +1380,54 @@ def handle_move_video(
 
     new_id = get_file_id(dest_path)
 
-    drive_name = item.get("drive", "")
+    # ------------------------------------------------------------
+    # CALCULATE DIRECTORY RELATIVE TO THE DESTINATION DRIVE
+    #
+    # DO NOT use the source drive here.
+    #
+    # Before this fix, a video moved:
+    #
+    #   /Volumes/Vids2/Destination/file.mp4
+    #
+    # to:
+    #
+    #   /Volumes/Vids/0A/file.mp4
+    #
+    # could still retain drive=Vids2.
+    #
+    # That made the catalog inconsistent with the physical file.
+    # ------------------------------------------------------------
 
-    volume_prefix = f"/Volumes/{drive_name}"
+    destination_volume_root = os.path.abspath(
+        os.path.join(
+            volumes_root,
+            resolved_drive,
+        )
+    )
 
-    if drive_name and target_directory.startswith(volume_prefix):
-        relative_directory = target_directory[len(volume_prefix) :].replace("\\", "/")
+    try:
+        relative_directory = os.path.relpath(
+            target_directory,
+            destination_volume_root,
+        )
 
-        if not relative_directory:
-            relative_directory = "/"
+    except ValueError:
+        relative_directory = ""
 
-        elif not relative_directory.startswith("/"):
-            relative_directory = "/" + relative_directory
+    if relative_directory in (
+        "",
+        ".",
+    ):
+        relative_directory = "/"
 
     else:
-        relative_directory = item.get("subfolder") or item.get("directory") or ""
+        relative_directory = relative_directory.replace(
+            "\\",
+            "/",
+        )
+
+        if not relative_directory.startswith("/"):
+            relative_directory = "/" + relative_directory
 
     updated_item = dict(item)
 
@@ -910,6 +1435,11 @@ def handle_move_video(
     updated_item["fileId"] = new_id
     updated_item["path"] = dest_path
     updated_item["fullPath"] = dest_path
+
+    # IMPORTANT:
+    # The drive now belongs to the destination, not the source.
+    updated_item["drive"] = resolved_drive
+
     updated_item["subfolder"] = relative_directory
     updated_item["directory"] = relative_directory
 
@@ -937,13 +1467,19 @@ def handle_move_video(
 
     save_disk_cache()
 
+    # ------------------------------------------------------------
+    # LOG SUCCESS
+    # ------------------------------------------------------------
+
     log_separator()
     log("VIDEO MOVE COMPLETED SUCCESSFULLY")
     log(f"--> Original ID: [{file_id}]")
     log(f"--> New ID: [{new_id}]")
     log(f"--> Source: [{src_path}]")
     log(f"--> Destination: [{dest_path}]")
+    log(f"--> Destination drive: [{resolved_drive}]")
     log(f"--> Directory: [{target_directory}]")
+    log(f"--> Relative directory: [{relative_directory}]")
     log_separator()
 
     return JSONResponse(
