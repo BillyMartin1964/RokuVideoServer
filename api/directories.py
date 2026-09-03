@@ -154,21 +154,78 @@ def _get_directory_path_parts(directory_path: str) -> list[str]:
     return [part for part in relative_path.split("/") if part]
 
 
+# ============================================================================
+# CHILD DIRECTORY COUNT
+# ============================================================================
+
+
+def _get_child_directory_count(directory_path: Path) -> int:
+    """Return the number of immediate child directories visible to Roku.
+
+    Only directories that would be returned by the directory API are counted.
+    Hidden and system/server directories excluded by _should_ignore_directory()
+    are therefore not included in the count.
+
+    The count includes only immediate children. It does not recursively count
+    directories farther down the hierarchy.
+
+    Examples:
+
+        /Movies
+            /Action
+            /Comedy
+            /Drama
+
+        Returns:
+            3
+
+    If the directory cannot be read, the count safely returns 0.
+    """
+
+    if not directory_path.exists():
+        return 0
+
+    if not directory_path.is_dir():
+        return 0
+
+    child_count = 0
+
+    try:
+        for entry in directory_path.iterdir():
+            if not entry.is_dir():
+                continue
+
+            if _should_ignore_directory(entry.name):
+                continue
+
+            child_count += 1
+
+    except OSError:
+        return 0
+
+    return child_count
+
+
 def _create_directory_item(
     drive_name: str,
     directory_path: str,
+    child_count: int = 0,
 ) -> dict:
     """Create the directory response object using DirectoryModel.
 
     Instantiating DirectoryModel guarantees both 'directory' and 'subfolder'
-    are populated alongside standard fields (isFolder, depth, parent, path).
+    are populated alongside standard fields (isFolder, depth, parent, path,
+    and childCount).
     """
 
     normalized_directory = _normalize_path(directory_path)
+
     model = DirectoryModel.create(
         drive=drive_name,
         directory=normalized_directory,
+        child_count=child_count,
     )
+
     return model.model_dump()
 
 
@@ -181,7 +238,11 @@ def _get_immediate_child_directories(
     drive_name: str,
     parent_directory: str,
 ) -> list:
-    """Return only the immediate physical child directories beneath the selected directory."""
+    """Return only the immediate physical child directories beneath the selected directory.
+
+    Each returned directory also includes the number of its own immediate
+    child directories.
+    """
 
     target_path = _get_directory_path(
         drive_name,
@@ -213,10 +274,13 @@ def _get_immediate_child_directories(
             else:
                 child_path = f"/{child_name}"
 
+            child_count = _get_child_directory_count(entry)
+
             children.append(
                 _create_directory_item(
                     drive_name,
                     child_path,
+                    child_count,
                 )
             )
 

@@ -29,6 +29,7 @@ class DirectoryModel(BaseModel):
     depth: int = 0  # 1 for root, len(path) for subfolders
     parent: str = ""  # Name of immediate parent folder or drive
     isFolder: bool = True  # Always True for directory models
+    childCount: int = 0  # Number of immediate child directories
 
     @computed_field
     @property
@@ -42,6 +43,7 @@ class DirectoryModel(BaseModel):
         drive: str,
         directory: str = "",
         thumb_url: str = "",
+        child_count: int = 0,
     ) -> "DirectoryModel":
         """Factory constructor that derives all standardized hierarchy fields."""
         norm_dir = normalize_directory_path(directory)
@@ -71,4 +73,5 @@ class DirectoryModel(BaseModel):
             depth=depth,
             parent=parent,
             isFolder=True,
+            childCount=child_count,
         )
