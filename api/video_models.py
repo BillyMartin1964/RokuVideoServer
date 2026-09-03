@@ -307,7 +307,6 @@ def _get_matching_video_items_by_file_name(
             norm = normalize_filename(item_file_name)
             scored_matches.append((score, norm, item))
 
-    # Sort by descending score, then by normalized filename for deterministic ordering
     scored_matches.sort(key=lambda t: (-t[0], t[1]))
 
     return [t[2] for t in scored_matches]
@@ -409,7 +408,6 @@ def _find_directory_on_volumes(
     if not normalized_directory:
         return []
 
-    # Reject traversal before joining anything to a volume root.
     directory_parts = [part for part in normalized_directory.split("/") if part]
 
     if any(part in (".", "..") for part in directory_parts):
@@ -510,7 +508,6 @@ def _resolve_move_target_directory(
 
     IMPORTANT:
         A leading slash by itself does NOT mean "use the source drive."
-        That was the source of the Vids/Vids2 move problem.
     """
     td = str(target_directory_input or "").strip()
 
@@ -522,13 +519,6 @@ def _resolve_move_target_directory(
     normalized_volumes_root = (
         os.path.abspath(volumes_root).replace("\\", "/").rstrip("/")
     )
-
-    # ------------------------------------------------------------
-    # FULL PHYSICAL PATH
-    #
-    # Example:
-    #   /Volumes/Vids/0A
-    # ------------------------------------------------------------
 
     if td_normalized == normalized_volumes_root:
         resolved = normalized_volumes_root
@@ -552,21 +542,6 @@ def _resolve_move_target_directory(
             ),
         )
 
-    # ------------------------------------------------------------
-    # LEADING-SLASH PATH
-    #
-    # Example:
-    #   /Vids/0A
-    #
-    # First determine whether the first component is actually a
-    # mounted volume. If it is, use it directly.
-    #
-    # Otherwise this is drive-independent, such as:
-    #   /0A
-    #
-    # In that case SEARCH ALL VOLUMES.
-    # ------------------------------------------------------------
-
     if td_normalized.startswith("/"):
         stripped = td_normalized.strip("/")
 
@@ -589,7 +564,6 @@ def _resolve_move_target_directory(
             )
         )
 
-        # /Vids/0A where Vids is actually mounted.
         if first_component and os.path.isdir(candidate_root):
             if remainder:
                 directory_parts = [part for part in remainder.split("/") if part]
@@ -627,9 +601,6 @@ def _resolve_move_target_directory(
                 first_component,
             )
 
-        # /0A, /Favorites, /Movies/0A, etc.
-        #
-        # This is NOT relative to the source drive.
         search_directory = stripped
 
         matches = _find_directory_on_volumes(
@@ -660,16 +631,6 @@ def _resolve_move_target_directory(
 
         return None, ""
 
-    # ------------------------------------------------------------
-    # RELATIVE PATH
-    #
-    # Example:
-    #   0A
-    #
-    # This retains the original behavior and resolves relative to
-    # the video's current directory.
-    # ------------------------------------------------------------
-
     if not os.path.isabs(td):
         parent_dir = os.path.dirname(_get_video_path(item))
 
@@ -692,13 +653,6 @@ def _resolve_move_target_directory(
             current_drive,
         )
 
-    # ------------------------------------------------------------
-    # OTHER ABSOLUTE PATH
-    #
-    # Keep the original absolute-path behavior, but determine the
-    # actual volume when possible.
-    # ------------------------------------------------------------
-
     resolved = os.path.abspath(td)
 
     return (
@@ -719,33 +673,6 @@ def handle_get_video_models(
 ):
     """
     Return VideoModels for videos matching the requested filters.
-
-    This is the VideoGrid browsing operation.
-
-    Optional filters:
-        drive:
-            One physical drive name.
-
-        directory:
-            Directory or subfolder containing the videos.
-
-        offset:
-            Number of matching videos to skip.
-
-        limit:
-            Maximum number of videos to return.
-            0 means return all remaining videos.
-
-    If a specific drive and directory are requested and the existing
-    catalog contains no matching videos, a targeted filesystem scan is
-    performed for that directory.
-
-    The response contains VideoModel JSON objects.
-    It does not contain video bytes.
-
-    NOTE:
-        This endpoint intentionally remains single-drive. Multi-drive
-        selection is handled by the filename search endpoint.
     """
     offset = max(0, offset)
     limit = max(0, min(limit, 500))
@@ -762,10 +689,6 @@ def handle_get_video_models(
         normalized_drive,
         normalized_directory,
     )
-
-    # ------------------------------------------------------------
-    # TARGETED DIRECTORY REINDEX
-    # ------------------------------------------------------------
 
     if len(matching) == 0 and normalized_drive and normalized_directory is not None:
         log_separator()
@@ -834,36 +757,6 @@ def handle_search_video_models(
 ):
     """
     Search VideoModels by filename or title.
-
-    The search endpoint is separate from the normal VideoGrid
-    browsing endpoint.
-
-    The drives parameter accepts zero, one, or multiple drive names.
-    When multiple drives are supplied, a video may match if it belongs
-    to any selected drive.
-
-    This allows the Roku application's drive checkboxes to determine
-    which drives participate in the filename search.
-
-    Examples:
-
-        drives=Vids
-
-            Search only the Vids drive.
-
-        drives=Vids&drives=Movies
-
-            Search both Vids and Movies.
-
-        drives=Vids&drives=Movies&drives=Archive
-
-            Search all three selected drives.
-
-        No drives parameter
-
-            Search all drives.
-
-    The search itself is currently performed against filenames.
     """
     search_text = str(file_name or "").strip()
 
@@ -884,19 +777,11 @@ def handle_search_video_models(
 
     base_url = _get_base_url(request)
 
-    # ------------------------------------------------------------
-    # SEARCH BY FILENAME
-    # ------------------------------------------------------------
-
     matching = _get_matching_video_items_by_file_name(
         search_text,
         normalized_drives,
         normalized_directory,
     )
-
-    # ------------------------------------------------------------
-    # EXCLUDE WORDS
-    # ------------------------------------------------------------
 
     if exclude_words:
         exclusions = [
@@ -966,9 +851,6 @@ def handle_get_video_model(
 ):
     """
     Return the complete VideoModel for one video.
-
-    The response contains metadata and URLs.
-    The video itself is never returned by this endpoint.
     """
     item = _get_video_item(file_id)
 
@@ -1005,8 +887,6 @@ def handle_get_thumbnail(
 ):
     """
     Serve the actual JPEG thumbnail for a video.
-
-    The VideoModel contains only the URL to this endpoint.
     """
     item = _get_video_item(file_id)
 
@@ -1062,8 +942,16 @@ def handle_move_video(
         0A
             Relative directory on the video's current drive.
 
-    A drive-independent directory is never automatically attached
-    to the source video's drive.
+    If the destination already contains a file with the same name,
+    an alternate filename is automatically generated:
+
+        Movie.mp4
+        Movie - Copy.mp4
+        Movie - Copy (2).mp4
+        Movie - Copy (3).mp4
+        ...
+
+    The move succeeds using the first available filename.
     """
     file_id = body.get("file_id") or body.get("id")
 
@@ -1073,10 +961,6 @@ def handle_move_video(
         or body.get("targetFolder")
     )
 
-    # Accept an explicit destination drive if the client supplies one.
-    #
-    # This is intentionally optional so the current Roku client does
-    # not have to be changed just to make the move operation work.
     target_drive_input = (
         body.get("target_drive")
         or body.get("targetDrive")
@@ -1138,10 +1022,6 @@ def handle_move_video(
 
     # ------------------------------------------------------------
     # EXPLICIT DESTINATION DRIVE
-    #
-    # When the client supplies a destination drive, resolve the
-    # directory against that drive. This takes priority over any
-    # source-drive information in the catalog.
     # ------------------------------------------------------------
 
     if target_drive:
@@ -1169,7 +1049,6 @@ def handle_move_video(
             "/",
         ).strip()
 
-        # A full physical path was supplied.
         normalized_root = destination_volume_root.replace(
             "\\",
             "/",
@@ -1179,8 +1058,6 @@ def handle_move_video(
             resolved = os.path.abspath(td)
 
         else:
-            # Strip any leading slash because the drive is already
-            # explicitly known.
             relative_directory = td.strip("/")
 
             if relative_directory:
@@ -1230,15 +1107,6 @@ def handle_move_video(
     else:
         # --------------------------------------------------------
         # NORMAL RESOLUTION
-        #
-        # This handles:
-        #
-        #   /0A
-        #   /Vids/0A
-        #   0A
-        #   /Volumes/Vids/0A
-        #
-        # Crucially, /0A is searched across all mounted volumes.
         # --------------------------------------------------------
 
         target_directory, resolved_drive = _resolve_move_target_directory(
@@ -1262,9 +1130,6 @@ def handle_move_video(
 
     # ------------------------------------------------------------
     # DETERMINE ACTUAL DESTINATION DRIVE
-    #
-    # This protects the catalog update even if resolution came from
-    # a physical path rather than an explicit drive.
     # ------------------------------------------------------------
 
     actual_destination_drive = _get_volume_name_from_path(
@@ -1282,8 +1147,6 @@ def handle_move_video(
 
     # ------------------------------------------------------------
     # TARGET DIRECTORY MUST ALREADY EXIST
-    #
-    # DO NOT CREATE IT.
     # ------------------------------------------------------------
 
     if not os.path.exists(target_directory):
@@ -1315,36 +1178,54 @@ def handle_move_video(
         )
 
     # ------------------------------------------------------------
-    # DESTINATION FILE
+    # DETERMINE DESTINATION FILENAME
+    #
+    # If the requested filename already exists, keep incrementing
+    # until an unused filename is found.
+    #
+    # Examples:
+    #
+    #   Movie.mp4
+    #   Movie - Copy.mp4
+    #   Movie - Copy (2).mp4
+    #   Movie - Copy (3).mp4
     # ------------------------------------------------------------
+
+    original_filename = os.path.basename(src_path)
+
+    original_name, extension = os.path.splitext(original_filename)
+
+    dest_filename = original_filename
 
     dest_path = os.path.join(
         target_directory,
-        os.path.basename(src_path),
+        dest_filename,
     )
+
+    duplicate_file = False
+    copy_number = 0
+
+    while os.path.exists(dest_path):
+        duplicate_file = True
+        copy_number += 1
+
+        if copy_number == 1:
+            dest_filename = f"{original_name} - Copy{extension}"
+
+        else:
+            dest_filename = f"{original_name} - Copy ({copy_number}){extension}"
+
+        dest_path = os.path.join(
+            target_directory,
+            dest_filename,
+        )
 
     log(f"--> Destination video path: [{dest_path}]")
 
-    if os.path.abspath(src_path) == os.path.abspath(dest_path):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Video is already in the target directory.",
-        )
-
-    # ------------------------------------------------------------
-    # DESTINATION FILE ALREADY EXISTS
-    # ------------------------------------------------------------
-
-    if os.path.exists(dest_path):
-        log(f"<!> Destination video already exists: [{dest_path}]")
-
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "A video with that name already exists in the target directory. "
-                f"Destination: [{dest_path}]."
-            ),
-        )
+    if duplicate_file:
+        log(f"--> Duplicate filename detected. Original: [{original_filename}]")
+        log(f"--> New filename: [{dest_filename}]")
+        log(f"--> Copy number: [{copy_number}]")
 
     # ------------------------------------------------------------
     # MOVE THE VIDEO
@@ -1360,6 +1241,7 @@ def handle_move_video(
         log(f"<!> Error moving video: {type(ex).__name__}: {ex}")
 
         log(f"--> Source: [{src_path}]")
+
         log(f"--> Destination: [{dest_path}]")
 
         raise HTTPException(
@@ -1379,24 +1261,6 @@ def handle_move_video(
     base_url = _get_base_url(request)
 
     new_id = get_file_id(dest_path)
-
-    # ------------------------------------------------------------
-    # CALCULATE DIRECTORY RELATIVE TO THE DESTINATION DRIVE
-    #
-    # DO NOT use the source drive here.
-    #
-    # Before this fix, a video moved:
-    #
-    #   /Volumes/Vids2/Destination/file.mp4
-    #
-    # to:
-    #
-    #   /Volumes/Vids/0A/file.mp4
-    #
-    # could still retain drive=Vids2.
-    #
-    # That made the catalog inconsistent with the physical file.
-    # ------------------------------------------------------------
 
     destination_volume_root = os.path.abspath(
         os.path.join(
@@ -1436,12 +1300,19 @@ def handle_move_video(
     updated_item["path"] = dest_path
     updated_item["fullPath"] = dest_path
 
-    # IMPORTANT:
-    # The drive now belongs to the destination, not the source.
+    # The drive now belongs to the destination.
     updated_item["drive"] = resolved_drive
 
     updated_item["subfolder"] = relative_directory
     updated_item["directory"] = relative_directory
+
+    # Keep the model's filename/name information synchronized with
+    # the actual filename that was created.
+    updated_item["fileName"] = dest_filename
+
+    updated_item["name"] = os.path.splitext(dest_filename)[0]
+
+    updated_item["title"] = os.path.splitext(dest_filename)[0]
 
     updated_model = _model_to_dict(
         updated_item,
@@ -1479,13 +1350,35 @@ def handle_move_video(
     log(f"--> Destination: [{dest_path}]")
     log(f"--> Destination drive: [{resolved_drive}]")
     log(f"--> Directory: [{target_directory}]")
-    log(f"--> Relative directory: [{relative_directory}]")
+
+    if duplicate_file:
+        log(f"--> DUPLICATE FILENAME: saved as [{dest_filename}]")
+
     log_separator()
+
+    # ------------------------------------------------------------
+    # RESPONSE
+    #
+    # Normal move:
+    #     "Video moved successfully."
+    #
+    # Duplicate:
+    #     "Duplicate file name. Your video was saved as
+    #      Movie - Copy (2).mp4."
+    # ------------------------------------------------------------
+
+    if duplicate_file:
+        message = f"Duplicate file name. Your video was saved as {dest_filename}."
+
+    else:
+        message = "Video moved successfully."
 
     return JSONResponse(
         {
             "success": True,
-            "message": "Video moved successfully.",
+            "message": message,
+            "duplicate": duplicate_file,
+            "newFileName": dest_filename,
             "newId": new_id,
             "data": updated_model,
         }
