@@ -7,11 +7,13 @@ def normalize_directory_path(path: str) -> str:
     Examples:
         "" or "/"           -> ""
         "Fav" or "/Fav/"    -> "/Fav"
-        "/Fav/AndiJames/"   -> "/Fav/AndiJames"
+        "/Fav/Comedies/"   -> "/Fav/Comedies"
     """
     if not path:
         return ""
+
     cleaned = f"/{path.strip('/')}"
+
     return "" if cleaned == "/" else cleaned
 
 
@@ -23,10 +25,14 @@ class VideoModel(BaseModel):
     It does NOT contain:
         - actual video bytes
         - actual thumbnail image bytes
+        - actual trick-play/BIF bytes
 
     thumbnailUrl points to the thumbnail endpoint.
 
     streamUrl points to the video streaming endpoint.
+
+    trickPlayUrl points to the trick-play resource, normally a Roku BIF
+    file. The actual trick-play data is served separately by the server.
     """
 
     # ------------------------------------------------------------------------
@@ -62,6 +68,8 @@ class VideoModel(BaseModel):
     streamUrl: str = ""
 
     thumbnailUrl: str = ""
+
+    trickPlayUrl: str = ""
 
     # ------------------------------------------------------------------------
     # Video metadata
@@ -105,10 +113,13 @@ def create_video_model(
     This function normalizes the different field names used by the
     catalog into the VideoModel contract.
 
-    It does not generate thumbnails and does not stream video.
+    It does not generate thumbnails or trick-play files.
 
-    It only creates the model and assigns the URLs that point to those
+    It only creates the model and assigns URLs that point to those
     separate services.
+
+    Missing thumbnail or trick-play resources are represented by an
+    empty URL and do not cause model creation to fail.
     """
 
     if not isinstance(data, dict):
@@ -180,6 +191,7 @@ def create_video_model(
     # ------------------------------------------------------------------------
 
     raw_directory = str(data.get("directory") or data.get("subfolder") or "")
+
     directory = normalize_directory_path(raw_directory)
 
     # ------------------------------------------------------------------------
@@ -255,14 +267,60 @@ def create_video_model(
     # The model contains the URL.
     #
     # The thumbnail endpoint returns the actual JPEG later.
+    #
+    # If a thumbnail URL was supplied, use it.
+    #
+    # If the catalog explicitly indicates that no thumbnail exists,
+    # leave thumbnailUrl empty.
+    #
+    # Otherwise, when we have an ID and base URL, use the standard
+    # thumbnail endpoint.
     # ------------------------------------------------------------------------
 
-    poster_url = str(
-        data.get("thumbnailUrl") or data.get("thumbnail") or data.get("poster") or ""
-    )
+    thumbnail_value = data.get("thumbnailUrl")
 
-    if raw_id and clean_base and not poster_url:
-        poster_url = f"{clean_base}/api/thumbnails/{raw_id}"
+    if thumbnail_value is None:
+        thumbnail_value = data.get("thumbnail") or data.get("poster") or ""
+
+    thumbnail_url = str(thumbnail_value or "").strip()
+
+    thumbnail_available = data.get("thumbnailAvailable")
+
+    if thumbnail_available is False:
+        thumbnail_url = ""
+    elif not thumbnail_url and raw_id and clean_base:
+        thumbnail_url = f"{clean_base}/api/thumbnails/{raw_id}"
+
+    # ------------------------------------------------------------------------
+    # Trick-play URL
+    #
+    # The model contains the URL.
+    #
+    # The trick-play endpoint returns the actual BIF data later.
+    #
+    # The preferred field is trickPlayUrl.
+    #
+    # bifUrl is accepted as a compatibility fallback in case an existing
+    # catalog or cached record already uses that name.
+    #
+    # If no trick-play resource exists, this remains an empty string.
+    # An empty trickPlayUrl is valid and simply means that no scene-based
+    # trick-play asset is currently available.
+    # ------------------------------------------------------------------------
+
+    trick_play_value = data.get("trickPlayUrl")
+
+    if trick_play_value is None:
+        trick_play_value = data.get("bifUrl")
+
+    trick_play_url = str(trick_play_value or "").strip()
+
+    trick_play_available = data.get("trickPlayAvailable")
+
+    if trick_play_available is False:
+        trick_play_url = ""
+    elif not trick_play_url and raw_id and clean_base:
+        trick_play_url = f"{clean_base}/api/trickplay/{raw_id}"
 
     # ------------------------------------------------------------------------
     # Stream URL
@@ -272,7 +330,7 @@ def create_video_model(
     # The streaming endpoint returns the actual video bytes later.
     # ------------------------------------------------------------------------
 
-    stream_url = str(data.get("streamUrl") or data.get("url") or "")
+    stream_url = str(data.get("streamUrl") or data.get("url") or "").strip()
 
     if raw_id and clean_base:
         stream_url = f"{clean_base}/api/videos/{raw_id}"
@@ -296,7 +354,8 @@ def create_video_model(
         duration=duration,
         height=height,
         width=width,
-        thumbnailUrl=poster_url,
+        thumbnailUrl=thumbnail_url,
+        trickPlayUrl=trick_play_url,
         releaseDate=release_date,
         categories=categories,
         bookmarkPosition=bookmark_position,

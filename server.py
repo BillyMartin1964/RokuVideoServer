@@ -3,7 +3,9 @@
 """Modified on 9/1/2026"""
 
 import os
+import queue
 import socket
+import subprocess
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -36,11 +38,240 @@ CLIENT_LOCK = threading.Lock()
 START_TIME = time.time()
 
 
+# ============================================================================
+# Background Thumbnail Generation
+# ============================================================================
+
+THUMBNAIL_QUEUE: queue.Queue[str] = queue.Queue()
+
+THUMBNAIL_QUEUE_LOCK = threading.Lock()
+
+THUMBNAIL_QUEUED: set[str] = set()
+
+THUMBNAIL_WORKER_STOP = threading.Event()
+
+THUMBNAIL_WORKER_THREAD: threading.Thread | None = None
+
+
+def queue_thumbnail_generation(file_id: str, file_path: str) -> bool:
+    """Queue a video thumbnail for background generation.
+
+    The same file cannot be queued more than once at a time.
+
+    Returns:
+        True if a new job was queued.
+        False if the job was already queued or the input is invalid.
+    """
+
+    if not file_id or not file_path:
+        return False
+
+    if not os.path.isfile(file_path):
+        return False
+
+    try:
+        thumbnail_path = video_model_service.thumbnail_cache_path(file_path)
+    except (OSError, ValueError, TypeError):
+        return False
+
+    if os.path.exists(thumbnail_path) and os.path.getsize(thumbnail_path) > 0:
+        return False
+
+    with THUMBNAIL_QUEUE_LOCK:
+        if file_id in THUMBNAIL_QUEUED:
+            return False
+
+        THUMBNAIL_QUEUED.add(file_id)
+
+    THUMBNAIL_QUEUE.put(file_id)
+
+    return True
+
+
+def thumbnail_worker() -> None:
+    """Process thumbnail generation jobs in the background.
+
+    Only one worker is used intentionally.
+
+    Thumbnail creation can invoke FFmpeg or QuickLook, both of which
+    can consume meaningful CPU and disk resources. A single worker
+    prevents a large catalog scan from launching hundreds of
+    simultaneous thumbnail processes.
+
+    Thumbnail failures are isolated from the catalog and API.
+    """
+
+    log("--> Background thumbnail worker started.")
+
+    while not THUMBNAIL_WORKER_STOP.is_set():
+        try:
+            file_id = THUMBNAIL_QUEUE.get(timeout=1.0)
+
+        except queue.Empty:
+            continue
+
+        try:
+            with CACHE_LOCK:
+                item = config.FILE_MAP.get(file_id)
+
+                if isinstance(item, dict):
+                    file_path = item.get("path") or item.get("fullPath") or ""
+                else:
+                    file_path = ""
+
+            if not file_path:
+                continue
+
+            if not os.path.isfile(file_path):
+                continue
+
+            try:
+                thumbnail_path = video_model_service.thumbnail_cache_path(file_path)
+
+                if (
+                    os.path.exists(thumbnail_path)
+                    and os.path.getsize(thumbnail_path) > 0
+                ):
+                    continue
+
+            except (
+                OSError,
+                ValueError,
+                TypeError,
+            ):
+                continue
+
+            log(f"--> Background thumbnail generation: {os.path.basename(file_path)}")
+
+            try:
+                generated_path = video_model_service.generate_thumbnail(file_path)
+
+                if generated_path:
+                    log(
+                        f"--> Background thumbnail complete: "
+                        f"{os.path.basename(file_path)}"
+                    )
+                else:
+                    log(
+                        f"<!> Background thumbnail unavailable: "
+                        f"{os.path.basename(file_path)}"
+                    )
+
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+                subprocess.SubprocessError,
+            ) as ex:
+                log(
+                    f"<!> Background thumbnail generation failed for "
+                    f"{os.path.basename(file_path)}: "
+                    f"{type(ex).__name__}: {ex}"
+                )
+
+        finally:
+            with THUMBNAIL_QUEUE_LOCK:
+                THUMBNAIL_QUEUED.discard(file_id)
+
+            THUMBNAIL_QUEUE.task_done()
+
+    log("--> Background thumbnail worker stopped.")
+
+
+def queue_missing_thumbnails() -> int:
+    """Find indexed videos without cached thumbnails and queue them.
+
+    This function does not generate thumbnails itself.
+
+    It only identifies missing thumbnail files and adds those videos
+    to the background thumbnail queue.
+
+    Returns:
+        Number of newly queued thumbnail jobs.
+    """
+
+    queued_count = 0
+
+    with CACHE_LOCK:
+        catalog_items = list(config.FILES_LIST)
+
+    for item in catalog_items:
+        if not isinstance(item, dict):
+            continue
+
+        file_id = str(item.get("id") or item.get("fileId") or "").strip()
+
+        if not file_id:
+            continue
+
+        file_path = str(item.get("path") or item.get("fullPath") or "").strip()
+
+        if not file_path:
+            continue
+
+        if not os.path.isfile(file_path):
+            continue
+
+        if queue_thumbnail_generation(
+            file_id,
+            file_path,
+        ):
+            queued_count += 1
+
+    if queued_count > 0:
+        log(f"--> Queued {queued_count} missing thumbnails for background generation.")
+
+    return queued_count
+
+
+def start_thumbnail_worker() -> threading.Thread:
+    """Start the single background thumbnail worker."""
+
+    global THUMBNAIL_WORKER_THREAD
+
+    THUMBNAIL_WORKER_STOP.clear()
+
+    worker_thread = threading.Thread(
+        target=thumbnail_worker,
+        daemon=True,
+        name="ThumbnailGenerator",
+    )
+
+    worker_thread.start()
+
+    THUMBNAIL_WORKER_THREAD = worker_thread
+
+    return worker_thread
+
+
+def stop_thumbnail_worker() -> None:
+    """Stop the background thumbnail worker cleanly."""
+
+    THUMBNAIL_WORKER_STOP.set()
+
+    worker_thread = THUMBNAIL_WORKER_THREAD
+
+    if worker_thread and worker_thread.is_alive():
+        worker_thread.join(timeout=5)
+
+
+# ============================================================================
+# Client / Network Helpers
+# ============================================================================
+
+
 def get_local_ip():
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock = socket.socket(
+            socket.AF_INET,
+            socket.SOCK_DGRAM,
+        )
+
         sock.connect(("8.8.8.8", 80))
+
         ip = sock.getsockname()[0]
+
         sock.close()
 
         if ip:
@@ -51,6 +282,7 @@ def get_local_ip():
 
     try:
         hostname = socket.gethostname()
+
         ip = socket.gethostbyname(hostname)
 
         if ip and not ip.startswith("127."):
@@ -86,6 +318,7 @@ class MoveVideoRequest(BaseModel):
         json_schema_extra={"example": "vid_001"},
         description="ID of the video to move",
     )
+
     target_directory: str = Field(
         ...,
         json_schema_extra={"example": "/media/USB1/Movies"},
@@ -99,6 +332,7 @@ class RenameVideoRequest(BaseModel):
         json_schema_extra={"example": "vid_001"},
         description="ID of the video to rename",
     )
+
     new_name: str = Field(
         ...,
         json_schema_extra={"example": "NewMovieName.mp4"},
@@ -119,17 +353,90 @@ async def lifespan(app: FastAPI):
     log_separator()
 
     ffmpeg_service.initialize_ffmpeg()
+
     video_model_service.ensure_default_poster()
+
     video_service.load_disk_cache()
+
+    # ------------------------------------------------------------------------
+    # Start the thumbnail worker BEFORE catalog scanning begins.
+    #
+    # The worker simply waits for jobs. It does not scan or generate
+    # anything until jobs are placed into THUMBNAIL_QUEUE.
+    # ------------------------------------------------------------------------
+
+    start_thumbnail_worker()
+
+    # ------------------------------------------------------------------------
+    # Catalog scanner
+    #
+    # Catalog indexing remains independent of thumbnail generation.
+    # ------------------------------------------------------------------------
 
     timer_thread = threading.Thread(
         target=video_service.background_timer_loop,
         daemon=True,
         name="CatalogScanner",
     )
+
     timer_thread.start()
 
+    # ------------------------------------------------------------------------
+    # File watcher
+    # ------------------------------------------------------------------------
+
     watcher_observer = watcher_service.start_file_watcher()
+
+    # ------------------------------------------------------------------------
+    # Initial missing-thumbnail discovery
+    #
+    # The catalog cache has already been loaded above. The catalog scanner
+    # is also running independently.
+    #
+    # This initial pass handles videos already present in the disk cache.
+    # Newly indexed videos are picked up by the background monitor below.
+    # ------------------------------------------------------------------------
+
+    queue_missing_thumbnails()
+
+    # ------------------------------------------------------------------------
+    # Background thumbnail monitor
+    #
+    # The catalog scanner can discover additional videos after startup.
+    # This monitor periodically looks for newly indexed videos that do
+    # not yet have thumbnails.
+    # ------------------------------------------------------------------------
+
+    def thumbnail_monitor_loop():
+        log("--> Background thumbnail monitor started.")
+
+        while not THUMBNAIL_WORKER_STOP.is_set():
+            try:
+                queue_missing_thumbnails()
+
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+            ) as ex:
+                log(f"<!> Thumbnail monitor error: {type(ex).__name__}: {ex}")
+
+            THUMBNAIL_WORKER_STOP.wait(timeout=10)
+
+        log("--> Background thumbnail monitor stopped.")
+
+    thumbnail_monitor_thread = threading.Thread(
+        target=thumbnail_monitor_loop,
+        daemon=True,
+        name="ThumbnailMonitor",
+    )
+
+    thumbnail_monitor_thread.start()
+
+    # ------------------------------------------------------------------------
+    # Server information
+    # ------------------------------------------------------------------------
 
     local_ip = get_local_ip()
 
@@ -144,9 +451,15 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # ------------------------------------------------------------------------
+    # Shutdown
+    # ------------------------------------------------------------------------
+
     if watcher_observer:
         watcher_observer.stop()
         watcher_observer.join()
+
+    stop_thumbnail_worker()
 
 
 # ============================================================================
@@ -184,6 +497,7 @@ app.add_middleware(
 @app.middleware("http")
 async def track_connected_clients(request: Request, call_next):
     """Tracks unique client IPs and their last active timestamps."""
+
     client_ip = request.client.host if request.client else "unknown"
 
     with CLIENT_LOCK:
@@ -199,13 +513,19 @@ async def track_connected_clients(request: Request, call_next):
 # ============================================================================
 
 
-@app.get("/api/health", tags=["Health"])
+@app.get(
+    "/api/health",
+    tags=["Health"],
+)
 def get_health(request: Request):
     """Return server health and status information including client metrics."""
+
     base_response = api_health.handle_get_health(request)
 
     now = time.time()
+
     five_mins_ago = now - 300
+
     twenty_four_hours_ago = now - 86400
 
     with CLIENT_LOCK:
@@ -221,7 +541,9 @@ def get_health(request: Request):
 
     if isinstance(base_response, dict):
         base_response["activeClients"] = active_clients
+
         base_response["clients24h"] = clients_24h
+
         base_response["start_time"] = START_TIME
 
         if "driveCount" not in base_response and "drive_count" not in base_response:
@@ -232,11 +554,17 @@ def get_health(request: Request):
     return base_response
 
 
-@app.get("/api/clients", tags=["Health"])
+@app.get(
+    "/api/clients",
+    tags=["Health"],
+)
 def get_connected_clients():
     """Return connected client analytics and recently seen IP addresses."""
+
     now = time.time()
+
     five_mins_ago = now - 300
+
     twenty_four_hours_ago = now - 86400
 
     with CLIENT_LOCK:
@@ -275,6 +603,7 @@ def set_authorized_drives(
     body: SetAuthorizedDrivesRequest,
 ):
     """Set drives that users can see."""
+
     return api_drives.handle_set_authorized_drives(
         request,
         body.model_dump() if hasattr(body, "model_dump") else body.dict(),
@@ -298,6 +627,7 @@ def get_drives(
 
     Defaults to returning authorized drives only.
     """
+
     return api_drives.handle_get_drives(
         request,
         include_all=include_all,
@@ -327,6 +657,7 @@ def get_directories(
 
     With a drive parameter, returns directories for that drive.
     """
+
     if drive:
         return api_directories.handle_get_directories_by_drive(
             request,
@@ -345,6 +676,7 @@ def get_directories_by_drive(
     drive_name: str,
 ):
     """Return directories associated with a specific drive."""
+
     return api_directories.handle_get_directories_by_drive(
         request,
         drive_name,
@@ -364,6 +696,7 @@ def get_child_directories(
     ),
 ):
     """Return only the immediate child directories."""
+
     return api_directories.handle_get_child_directories(
         request,
         drive,
@@ -410,6 +743,7 @@ def get_video_models(
 
     It does not return video file bytes.
     """
+
     return api_video_models.handle_get_video_models(
         request,
         drive,
@@ -574,6 +908,7 @@ def search_video_models(
 
     The response contains complete VideoModel JSON objects.
     """
+
     return api_video_models.handle_search_video_models(
         request=request,
         file_name=fileName,
@@ -600,6 +935,7 @@ def get_video_model(
     The response contains metadata and URLs for the
     thumbnail and video stream. The video itself is not returned.
     """
+
     return api_video_models.handle_get_video_model(
         request,
         file_id,
@@ -619,6 +955,7 @@ def get_video_model_thumbnail(
 
     The VideoModel contains the URL to this endpoint.
     """
+
     return api_video_models.handle_get_thumbnail(
         request,
         file_id,
@@ -639,9 +976,11 @@ def move_video(
     body: MoveVideoRequest,
 ):
     """Move a video to an existing directory."""
+
     payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
 
     # Provide both snake_case and camelCase keys for downstream compatibility.
+
     if "file_id" in payload and "fileId" not in payload:
         payload["fileId"] = payload["file_id"]
 
@@ -663,6 +1002,7 @@ def rename_video(
     body: RenameVideoRequest,
 ):
     """Rename a video."""
+
     payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
 
     if "file_id" in payload and "fileId" not in payload:
@@ -686,6 +1026,7 @@ def delete_video(
     file_id: str,
 ):
     """Delete a video and remove it from the catalog."""
+
     return api_video_models.handle_delete_video(
         request,
         file_id,
