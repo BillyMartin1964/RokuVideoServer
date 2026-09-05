@@ -24,7 +24,15 @@ import api.videos as api_videos
 import config
 from config import CACHE_LOCK, PORT, log, log_separator
 from services import (
-    bif_service,
+    # BIF GENERATION TEMPORARILY DISABLED.
+    #
+    # Roku's biftool_processor currently requires old FFmpeg 4-era
+    # dynamic libraries that are not provided by the installed
+    # FFmpeg 9 Homebrew installation.
+    #
+    # The BIF service remains in the project for later use.
+    #
+    # bif_service,
     ffmpeg_service,
     video_model_service,
     video_service,
@@ -260,209 +268,214 @@ def stop_thumbnail_worker() -> None:
 
 # ============================================================================
 # Background BIF Generation
+#
+# TEMPORARILY DISABLED
+#
+# Roku's biftool_processor is linked against old FFmpeg 4-era libraries:
+#
+#     libavformat.58.dylib
+#     libavcodec.58.dylib
+#     libavutil.56.dylib
+#     libswscale.5.dylib
+#
+# The current Mac installation uses FFmpeg 9.
+#
+# DO NOT enable this section until the biftool dependency problem has been
+# solved independently of the working server/thumbnail system.
+#
+# The code is intentionally preserved here for later restoration.
 # ============================================================================
 
-BIF_QUEUE: queue.Queue[str] = queue.Queue()
-
-BIF_QUEUE_LOCK = threading.Lock()
-
-BIF_QUEUED: set[str] = set()
-
-BIF_WORKER_STOP = threading.Event()
-
-BIF_WORKER_THREAD: threading.Thread | None = None
-
-
-def queue_bif_generation(file_id: str, file_path: str) -> bool:
-    """Queue a video BIF for background generation.
-
-    The same file cannot be queued more than once at a time.
-
-    Returns:
-        True if a new job was queued.
-        False if the job was already queued or the input is invalid.
-    """
-
-    if not file_id or not file_path:
-        return False
-
-    if not os.path.isfile(file_path):
-        return False
-
-    bif_path = bif_service.get_bif_path(file_id)
-
-    if os.path.exists(bif_path) and os.path.getsize(bif_path) > 0:
-        return False
-
-    with BIF_QUEUE_LOCK:
-        if file_id in BIF_QUEUED:
-            return False
-
-        BIF_QUEUED.add(file_id)
-
-    BIF_QUEUE.put(file_id)
-
-    return True
-
-
-def bif_worker() -> None:
-    """Process BIF generation jobs in the background.
-
-    Only one worker is used intentionally.
-
-    BIF generation can invoke biftool and FFmpeg and can consume
-    significant CPU, disk, and temporary storage. A single worker
-    keeps BIF generation from overwhelming the server during a
-    large catalog scan.
-
-    BIF failures are isolated from the catalog and API.
-    """
-
-    log("--> Background BIF worker started.")
-
-    while not BIF_WORKER_STOP.is_set():
-        try:
-            file_id = BIF_QUEUE.get(timeout=1.0)
-
-        except queue.Empty:
-            continue
-
-        try:
-            with CACHE_LOCK:
-                item = config.FILE_MAP.get(file_id)
-
-                if isinstance(item, dict):
-                    file_path = item.get("path") or item.get("fullPath") or ""
-                else:
-                    file_path = ""
-
-            if not file_path:
-                continue
-
-            if not os.path.isfile(file_path):
-                continue
-
-            bif_path = bif_service.get_bif_path(file_id)
-
-            try:
-                if os.path.exists(bif_path) and os.path.getsize(bif_path) > 0:
-                    continue
-
-            except OSError:
-                continue
-
-            log(f"--> Background BIF generation: {os.path.basename(file_path)}")
-
-            try:
-                generated = bif_service.generate_bif(
-                    file_id,
-                    file_path,
-                )
-
-                if generated:
-                    log(f"--> Background BIF complete: {os.path.basename(file_path)}")
-                else:
-                    log(
-                        f"<!> Background BIF unavailable: {os.path.basename(file_path)}"
-                    )
-
-            except (
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-                subprocess.SubprocessError,
-            ) as ex:
-                log(
-                    f"<!> Background BIF generation failed for "
-                    f"{os.path.basename(file_path)}: "
-                    f"{type(ex).__name__}: {ex}"
-                )
-
-        finally:
-            with BIF_QUEUE_LOCK:
-                BIF_QUEUED.discard(file_id)
-
-            BIF_QUEUE.task_done()
-
-    log("--> Background BIF worker stopped.")
-
-
-def queue_missing_bifs() -> int:
-    """Find indexed videos without cached BIF files and queue those videos.
-
-    This function does not generate BIF files itself.
-
-    It only identifies missing BIF files and adds those videos
-    to the background BIF queue.
-
-    Returns:
-        Number of newly queued BIF jobs.
-    """
-
-    queued_count = 0
-
-    with CACHE_LOCK:
-        catalog_items = list(config.FILES_LIST)
-
-    for item in catalog_items:
-        if not isinstance(item, dict):
-            continue
-
-        file_id = str(item.get("id") or item.get("fileId") or "").strip()
-
-        if not file_id:
-            continue
-
-        file_path = str(item.get("path") or item.get("fullPath") or "").strip()
-
-        if not file_path:
-            continue
-
-        if not os.path.isfile(file_path):
-            continue
-
-        if queue_bif_generation(
-            file_id,
-            file_path,
-        ):
-            queued_count += 1
-
-    if queued_count > 0:
-        log(f"--> Queued {queued_count} missing BIFs for background generation.")
-
-    return queued_count
-
-
-def start_bif_worker() -> threading.Thread:
-    """Start the single background BIF worker."""
-
-    global BIF_WORKER_THREAD
-
-    BIF_WORKER_STOP.clear()
-
-    worker_thread = threading.Thread(
-        target=bif_worker,
-        daemon=True,
-        name="BifGenerator",
-    )
-
-    worker_thread.start()
-
-    BIF_WORKER_THREAD = worker_thread
-
-    return worker_thread
-
-
-def stop_bif_worker() -> None:
-    """Stop the BIF worker cleanly."""
-
-    BIF_WORKER_STOP.set()
-
-    worker_thread = BIF_WORKER_THREAD
-
-    if worker_thread and worker_thread.is_alive():
-        worker_thread.join(timeout=5)
+# BIF_QUEUE: queue.Queue[str] = queue.Queue()
+#
+# BIF_QUEUE_LOCK = threading.Lock()
+#
+# BIF_QUEUED: set[str] = set()
+#
+# BIF_WORKER_STOP = threading.Event()
+#
+# BIF_WORKER_THREAD: threading.Thread | None = None
+
+
+# def queue_bif_generation(file_id: str, file_path: str) -> bool:
+#     """Queue a video BIF for background generation.
+#
+#     TEMPORARILY DISABLED.
+#     """
+#
+#     if not file_id or not file_path:
+#         return False
+#
+#     if not os.path.isfile(file_path):
+#         return False
+#
+#     bif_path = bif_service.get_bif_path(file_id)
+#
+#     if os.path.exists(bif_path) and os.path.getsize(bif_path) > 0:
+#         return False
+#
+#     with BIF_QUEUE_LOCK:
+#         if file_id in BIF_QUEUED:
+#             return False
+#
+#         BIF_QUEUED.add(file_id)
+#
+#     BIF_QUEUE.put(file_id)
+#
+#     return True
+
+
+# def bif_worker() -> None:
+#     """Process BIF generation jobs in the background.
+#
+#     TEMPORARILY DISABLED.
+#     """
+#
+#     log("--> Background BIF worker started.")
+#
+#     while not BIF_WORKER_STOP.is_set():
+#         try:
+#             file_id = BIF_QUEUE.get(timeout=1.0)
+#
+#         except queue.Empty:
+#             continue
+#
+#         try:
+#             with CACHE_LOCK:
+#                 item = config.FILE_MAP.get(file_id)
+#
+#                 if isinstance(item, dict):
+#                     file_path = item.get("path") or item.get("fullPath") or ""
+#                 else:
+#                     file_path = ""
+#
+#             if not file_path:
+#                 continue
+#
+#             if not os.path.isfile(file_path):
+#                 continue
+#
+#             bif_path = bif_service.get_bif_path(file_id)
+#
+#             try:
+#                 if os.path.exists(bif_path) and os.path.getsize(bif_path) > 0:
+#                     continue
+#
+#             except OSError:
+#                 continue
+#
+#             log(f"--> Background BIF generation: {os.path.basename(file_path)}")
+#
+#             try:
+#                 generated = bif_service.generate_bif(
+#                     file_id,
+#                     file_path,
+#                 )
+#
+#                 if generated:
+#                     log(f"--> Background BIF complete: {os.path.basename(file_path)}")
+#                 else:
+#                     log(
+#                         f"<!> Background BIF unavailable: {os.path.basename(file_path)}"
+#                     )
+#
+#             except (
+#                 OSError,
+#                 RuntimeError,
+#                 ValueError,
+#                 TypeError,
+#                 subprocess.SubprocessError,
+#             ) as ex:
+#                 log(
+#                     f"<!> Background BIF generation failed for "
+#                     f"{os.path.basename(file_path)}: "
+#                     f"{type(ex).__name__}: {ex}"
+#                 )
+#
+#         finally:
+#             with BIF_QUEUE_LOCK:
+#                 BIF_QUEUED.discard(file_id)
+#
+#             BIF_QUEUE.task_done()
+#
+#     log("--> Background BIF worker stopped.")
+
+
+# def queue_missing_bifs() -> int:
+#     """Find indexed videos without cached BIF files and queue those videos.
+#
+#     TEMPORARILY DISABLED.
+#     """
+#
+#     queued_count = 0
+#
+#     with CACHE_LOCK:
+#         catalog_items = list(config.FILES_LIST)
+#
+#     for item in catalog_items:
+#         if not isinstance(item, dict):
+#             continue
+#
+#         file_id = str(item.get("id") or item.get("fileId") or "").strip()
+#
+#         if not file_id:
+#             continue
+#
+#         file_path = str(item.get("path") or item.get("fullPath") or "").strip()
+#
+#         if not file_path:
+#             continue
+#
+#         if not os.path.isfile(file_path):
+#             continue
+#
+#         if queue_bif_generation(
+#             file_id,
+#             file_path,
+#         ):
+#             queued_count += 1
+#
+#     if queued_count > 0:
+#         log(f"--> Queued {queued_count} missing BIFs for background generation.")
+#
+#     return queued_count
+
+
+# def start_bif_worker() -> threading.Thread:
+#     """Start the single background BIF worker.
+#
+#     TEMPORARILY DISABLED.
+#     """
+#
+#     global BIF_WORKER_THREAD
+#
+#     BIF_WORKER_STOP.clear()
+#
+#     worker_thread = threading.Thread(
+#         target=bif_worker,
+#         daemon=True,
+#         name="BifGenerator",
+#     )
+#
+#     worker_thread.start()
+#
+#     BIF_WORKER_THREAD = worker_thread
+#
+#     return worker_thread
+
+
+# def stop_bif_worker() -> None:
+#     """Stop the BIF worker cleanly.
+#
+#     TEMPORARILY DISABLED.
+#     """
+#
+#     BIF_WORKER_STOP.set()
+#
+#     worker_thread = BIF_WORKER_THREAD
+#
+#     if worker_thread and worker_thread.is_alive():
+#         worker_thread.join(timeout=5)
 
 
 # ============================================================================
@@ -563,7 +576,18 @@ async def lifespan(app: FastAPI):
 
     ffmpeg_service.initialize_ffmpeg()
 
-    bif_service.initialize_biftool()
+    # =========================================================================
+    # BIF GENERATION TEMPORARILY DISABLED
+    #
+    # Do not initialize biftool here.
+    #
+    # The Roku biftool_processor currently requires old FFmpeg libraries
+    # that are incompatible with the current FFmpeg installation.
+    #
+    # The working server must remain independent of BIF generation.
+    # =========================================================================
+
+    # bif_service.initialize_biftool()
 
     video_model_service.ensure_default_poster()
 
@@ -578,14 +602,16 @@ async def lifespan(app: FastAPI):
 
     start_thumbnail_worker()
 
-    # ------------------------------------------------------------------------
-    # Start the BIF worker BEFORE catalog scanning begins.
+    # =========================================================================
+    # BIF WORKER TEMPORARILY DISABLED
     #
-    # The worker simply waits for jobs. It does not scan or generate
-    # anything until jobs are placed into BIF_QUEUE.
-    # ------------------------------------------------------------------------
+    # The BIF worker is intentionally not started.
+    #
+    # BIF generation will be restored after the Roku biftool FFmpeg
+    # dependency has been solved independently.
+    # =========================================================================
 
-    start_bif_worker()
+    # start_bif_worker()
 
     # ------------------------------------------------------------------------
     # Catalog scanner
@@ -619,15 +645,16 @@ async def lifespan(app: FastAPI):
 
     queue_missing_thumbnails()
 
-    # ------------------------------------------------------------------------
-    # Initial missing-BIF discovery
+    # =========================================================================
+    # INITIAL BIF DISCOVERY TEMPORARILY DISABLED
     #
-    # The catalog cache has already been loaded above. This initial pass
-    # handles videos already present in the disk cache.
-    # Newly indexed videos are picked up by the background monitor below.
-    # ------------------------------------------------------------------------
+    # Do not queue missing BIF files during server startup.
+    #
+    # This prevents the server from invoking Roku's biftool while the
+    # FFmpeg dependency problem is unresolved.
+    # =========================================================================
 
-    queue_missing_bifs()
+    # queue_missing_bifs()
 
     # ------------------------------------------------------------------------
     # Background thumbnail monitor
@@ -664,40 +691,42 @@ async def lifespan(app: FastAPI):
 
     thumbnail_monitor_thread.start()
 
-    # ------------------------------------------------------------------------
-    # Background BIF monitor
+    # =========================================================================
+    # BIF MONITOR TEMPORARILY DISABLED
     #
-    # The catalog scanner can discover additional videos after startup.
-    # This monitor periodically looks for newly indexed videos that do
-    # not yet have BIF files.
-    # ------------------------------------------------------------------------
+    # Do not periodically scan for missing BIF files.
+    #
+    # This is intentionally disabled so the working server and thumbnail
+    # generation remain completely independent of biftool.
+    # =========================================================================
 
-    def bif_monitor_loop():
-        log("--> Background BIF monitor started.")
-
-        while not BIF_WORKER_STOP.is_set():
-            try:
-                queue_missing_bifs()
-
-            except (
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-            ) as ex:
-                log(f"<!> BIF monitor error: {type(ex).__name__}: {ex}")
-
-            BIF_WORKER_STOP.wait(timeout=10)
-
-        log("--> Background BIF monitor stopped.")
-
-    bif_monitor_thread = threading.Thread(
-        target=bif_monitor_loop,
-        daemon=True,
-        name="BifMonitor",
-    )
-
-    bif_monitor_thread.start()
+    # def bif_monitor_loop():
+    #     log("--> Background BIF monitor started.")
+    #
+    #     while not BIF_WORKER_STOP.is_set():
+    #         try:
+    #             queue_missing_bifs()
+    #
+    #         except (
+    #             OSError,
+    #             RuntimeError,
+    #             ValueError,
+    #             TypeError,
+    #         ) as ex:
+    #             log(f"<!> BIF monitor error: {type(ex).__name__}: {ex}")
+    #
+    #         BIF_WORKER_STOP.wait(timeout=10)
+    #
+    #     log("--> Background BIF monitor stopped.")
+    #
+    #
+    # bif_monitor_thread = threading.Thread(
+    #     target=bif_monitor_loop,
+    #     daemon=True,
+    #     name="BifMonitor",
+    # )
+    #
+    # bif_monitor_thread.start()
 
     # ------------------------------------------------------------------------
     # Server information
@@ -726,7 +755,11 @@ async def lifespan(app: FastAPI):
 
     stop_thumbnail_worker()
 
-    stop_bif_worker()
+    # =========================================================================
+    # BIF WORKER SHUTDOWN TEMPORARILY DISABLED
+    # =========================================================================
+
+    # stop_bif_worker()
 
 
 # ============================================================================
@@ -1231,6 +1264,15 @@ def get_video_model_thumbnail(
 
 # ============================================================================
 # TRICK-PLAY / BIF ENDPOINT
+#
+# NOTE:
+# This endpoint remains enabled.
+#
+# It does NOT invoke biftool and does NOT invoke FFmpeg.
+#
+# It simply serves an existing BIF file if one is present.
+#
+# BIF GENERATION itself is temporarily disabled above.
 # ============================================================================
 
 
