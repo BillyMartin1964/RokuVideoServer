@@ -13,6 +13,7 @@ from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import api.directories as api_directories
@@ -959,6 +960,62 @@ def get_video_model_thumbnail(
     return api_video_models.handle_get_thumbnail(
         request,
         file_id,
+    )
+
+
+# ============================================================================
+# TRICK-PLAY / BIF ENDPOINT
+# ============================================================================
+
+
+@app.get(
+    "/api/trickplay/{file_id}",
+    tags=["Video Models"],
+)
+def get_trick_play(
+    file_id: str,
+):
+    """
+    Return the Roku BIF trick-play file for a video.
+
+    The BIF file is stored separately from the video catalog and
+    regular poster-thumbnail cache.
+
+    BIF files are generated independently and are not created by
+    this endpoint.
+
+    The VideoModel exposes the URL to this endpoint through
+    trickPlayUrl.
+    """
+
+    bif_path = os.path.join(
+        config.BIF_CACHE_DIR,
+        f"{file_id}.bif",
+    )
+
+    if not os.path.isfile(bif_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Trick-play BIF Not Found",
+        )
+
+    try:
+        if os.path.getsize(bif_path) <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Trick-play BIF Not Found",
+            )
+
+    except OSError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Trick-play BIF Not Found",
+        )
+
+    return FileResponse(
+        path=bif_path,
+        media_type="application/octet-stream",
+        filename=f"{file_id}.bif",
     )
 
 

@@ -447,6 +447,65 @@ def ensure_directory_indexed(
     return added_count > 0 or updated_count > 0
 
 
+def cleanup_media_cache():
+    with CACHE_LOCK:
+        valid_video_ids = {
+            item.get("id")
+            for item in config.FILES_LIST
+            if (
+                isinstance(item, dict)
+                and isinstance(item.get("id"), str)
+                and item.get("id")
+            )
+        }
+
+    cache_directories = [
+        (config.THUMB_CACHE_DIR, ".jpg"),
+        (config.BIF_CACHE_DIR, ".bif"),
+    ]
+
+    for cache_directory, expected_extension in cache_directories:
+        if not os.path.isdir(cache_directory):
+            continue
+
+        try:
+            with os.scandir(cache_directory) as entries:
+                for entry in entries:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+
+                    file_name = entry.name
+
+                    if (
+                        cache_directory == config.THUMB_CACHE_DIR
+                        and file_name == "default_poster.jpg"
+                    ):
+                        continue
+
+                    if not file_name.lower().endswith(expected_extension):
+                        continue
+
+                    file_id = os.path.splitext(file_name)[0]
+
+                    if file_id in valid_video_ids:
+                        continue
+
+                    try:
+                        os.remove(entry.path)
+                        log(f"--> Removed orphaned media cache: {entry.path}")
+                    except OSError as ex:
+                        log(
+                            f"<!> Could not remove orphaned media cache "
+                            f"{entry.path}: {type(ex).__name__}: {ex}"
+                        )
+
+        except OSError as ex:
+            log(
+                f"<!> Media cache cleanup warning for {cache_directory}: "
+                f"{type(ex).__name__}: {ex}"
+            )
+
+
 def run_catalog_scan():
     if config.SCAN_IN_PROGRESS:
         return
@@ -489,6 +548,8 @@ def run_catalog_scan():
             config.FILE_MAP = new_map
 
         save_disk_cache()
+
+        cleanup_media_cache()
 
         elapsed = round(
             time.time() - start_time,
