@@ -11,8 +11,12 @@ PORT = 8001
 VOLUMES_DIR = "/Volumes"
 
 # Cache Directories & Files
-THUMB_CACHE_DIR = "/Volumes/ExtData/RokuTemp/roku_thumbs"
-FILE_CACHE_FILE = "/Volumes/ExtData/RokuTemp/roku_files_cache.json"
+
+CACHE_ROOT_DIR = "/Volumes/ExtData/RokuTemp"
+
+THUMB_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "roku_thumbs")
+BIF_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "roku_bif")
+FILE_CACHE_FILE = os.path.join(CACHE_ROOT_DIR, "roku_files_cache.json")
 DEFAULT_POSTER_FILE = os.path.join(THUMB_CACHE_DIR, "default_poster.jpg")
 PLAYBACK_POSITIONS_FILE = os.path.join(
     os.path.dirname(__file__), "data", "playback.json"
@@ -102,6 +106,7 @@ SERVER_START_TIME = time.time()
 
 # Ensure directories exist
 os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
+os.makedirs(BIF_CACHE_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(PLAYBACK_POSITIONS_FILE), exist_ok=True)
 
 # Logger Setup
