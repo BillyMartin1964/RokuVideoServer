@@ -15,6 +15,8 @@ FFMPEG_PATH = None
 
 
 def find_ffmpeg():
+    """Find a usable FFmpeg executable using paths defined in config.py."""
+
     configured_path = getattr(config, "FFMPEG_PATH", None)
 
     if (
@@ -24,21 +26,18 @@ def find_ffmpeg():
     ):
         return configured_path
 
-    candidates = [
-        "/opt/homebrew/bin/ffmpeg",
-        "/usr/local/bin/ffmpeg",
-        "/usr/bin/ffmpeg",
-        "/opt/local/bin/ffmpeg",
-    ]
+    configured_paths = getattr(config, "FFMPEG_PATHS", [])
 
-    for path in candidates:
-        if os.path.isfile(path) and os.access(path, os.X_OK):
+    for path in configured_paths:
+        if path and os.path.isfile(path) and os.access(path, os.X_OK):
             return path
 
     return shutil.which("ffmpeg")
 
 
 def initialize_trickplay():
+    """Find and verify FFmpeg for trick-play generation."""
+
     global FFMPEG_PATH
 
     FFMPEG_PATH = find_ffmpeg()
@@ -64,7 +63,11 @@ def initialize_trickplay():
 
         log(f"<!> FFmpeg test failed with exit code {result.returncode}")
 
-    except (subprocess.SubprocessError, OSError, ValueError) as ex:
+    except (
+        subprocess.SubprocessError,
+        OSError,
+        ValueError,
+    ) as ex:
         log(f"<!> FFmpeg test failed: {type(ex).__name__}: {ex}")
 
     FFMPEG_PATH = None
@@ -73,16 +76,42 @@ def initialize_trickplay():
 
 
 def get_trickplay_cache_dir(file_id):
+    """Return the trick-play cache directory for one video."""
+
+    if not file_id:
+        raise ValueError("file_id is required")
+
     return os.path.join(
-        config.THUMB_CACHE_DIR,
-        "trickplay",
+        config.TRICKPLAY_CACHE_DIR,
         str(file_id),
     )
 
 
-def get_trickplay_thumbnail_path(file_id, timestamp_seconds):
+def get_trickplay_frame_path(file_id, frame_number):
+    """Return the deterministic JPEG path for a trick-play frame.
+
+    Frame numbering is zero-based:
+
+        000000.jpg = 0 seconds
+        000001.jpg = 10 seconds
+        000002.jpg = 20 seconds
+        etc.
+    """
+
+    if not file_id:
+        raise ValueError("file_id is required")
+
+    try:
+        frame_number = int(frame_number)
+    except (TypeError, ValueError) as ex:
+        raise ValueError("frame_number must be an integer") from ex
+
+    if frame_number < 0:
+        raise ValueError("frame_number must be zero or greater")
+
     cache_dir = get_trickplay_cache_dir(file_id)
-    filename = f"{int(timestamp_seconds):06d}.jpg"
+
+    filename = f"{frame_number:06d}.jpg"
 
     return os.path.join(
         cache_dir,
@@ -91,8 +120,13 @@ def get_trickplay_thumbnail_path(file_id, timestamp_seconds):
 
 
 def generate_trickplay(file_id, video_path):
-    if not FFMPEG_PATH and not initialize_trickplay():
-        return False
+    """Generate JPEG trick-play frames for one video.
+
+    Frames are generated every TRICKPLAY_INTERVAL_SECONDS and stored
+    under config.TRICKPLAY_CACHE_DIR/<file_id>/.
+
+    The first frame is always numbered 000000.jpg.
+    """
 
     if not file_id:
         log(
@@ -107,31 +141,55 @@ def generate_trickplay(file_id, video_path):
         )
         return False
 
-    final_directory = get_trickplay_cache_dir(file_id)
+    if not FFMPEG_PATH and not initialize_trickplay():
+        return False
 
     try:
-        existing_files = [
-            name
-            for name in os.listdir(final_directory)
-            if name.lower().endswith(".jpg")
-        ]
+        final_directory = get_trickplay_cache_dir(file_id)
+    except (OSError, ValueError, TypeError) as ex:
+        log(
+            f"<!> Could not determine trick-play cache directory "
+            f"for video ID {file_id}: "
+            f"{type(ex).__name__}: {ex}"
+        )
+        return False
 
-        if existing_files:
-            log(
-                f"--> Trick-play cache already exists for "
-                f"{os.path.basename(video_path)}"
-            )
-            return True
+    try:
+        if os.path.isdir(final_directory):
+            existing_files = [
+                name
+                for name in os.listdir(final_directory)
+                if name.lower().endswith(".jpg")
+                and os.path.isfile(os.path.join(final_directory, name))
+                and os.path.getsize(os.path.join(final_directory, name)) > 0
+            ]
 
-    except OSError:
-        pass
+            if existing_files:
+                log(
+                    f"--> Trick-play cache already exists for "
+                    f"{os.path.basename(video_path)} "
+                    f"({len(existing_files)} JPEGs)"
+                )
+                return True
 
-    cache_root = os.path.dirname(final_directory)
+    except OSError as ex:
+        log(
+            f"<!> Could not inspect existing trick-play cache for "
+            f"{os.path.basename(video_path)}: "
+            f"{type(ex).__name__}: {ex}"
+        )
 
-    os.makedirs(
-        cache_root,
-        exist_ok=True,
-    )
+    cache_root = config.TRICKPLAY_CACHE_DIR
+
+    try:
+        os.makedirs(cache_root, exist_ok=True)
+    except OSError as ex:
+        log(
+            f"<!> Could not create trick-play cache root: "
+            f"{cache_root}: "
+            f"{type(ex).__name__}: {ex}"
+        )
+        return False
 
     try:
         with tempfile.TemporaryDirectory(
@@ -167,6 +225,8 @@ def generate_trickplay(file_id, video_path):
                 filter_expression,
                 "-q:v",
                 "4",
+                "-start_number",
+                "0",
                 output_pattern,
             ]
 
@@ -198,7 +258,17 @@ def generate_trickplay(file_id, video_path):
 
             generated_files = []
 
-            for file_name in sorted(os.listdir(temporary_directory)):
+            try:
+                temporary_files = sorted(os.listdir(temporary_directory))
+            except OSError as ex:
+                log(
+                    f"<!> Could not inspect FFmpeg output directory "
+                    f"for {os.path.basename(video_path)}: "
+                    f"{type(ex).__name__}: {ex}"
+                )
+                return False
+
+            for file_name in temporary_files:
                 if not file_name.lower().endswith(".jpg"):
                     continue
 
@@ -207,8 +277,11 @@ def generate_trickplay(file_id, video_path):
                     file_name,
                 )
 
-                if os.path.isfile(file_path) and os.path.getsize(file_path) > 0:
-                    generated_files.append(file_path)
+                try:
+                    if os.path.isfile(file_path) and os.path.getsize(file_path) > 0:
+                        generated_files.append(file_path)
+                except OSError:
+                    continue
 
             if not generated_files:
                 log(
@@ -252,7 +325,11 @@ def generate_trickplay(file_id, video_path):
             f"{os.path.basename(video_path)}"
         )
 
-    except (OSError, shutil.Error, ValueError) as ex:
+    except (
+        OSError,
+        shutil.Error,
+        ValueError,
+    ) as ex:
         log(
             f"<!> Trick-play generation error for "
             f"{os.path.basename(video_path)}: "
@@ -263,6 +340,12 @@ def generate_trickplay(file_id, video_path):
 
 
 def get_trickplay_thumbnail(file_id, timestamp_seconds):
+    """Return a trick-play JPEG using a timestamp.
+
+    This compatibility helper maps a timestamp directly to the
+    corresponding 10-second frame.
+    """
+
     if not file_id:
         return None
 
@@ -274,22 +357,35 @@ def get_trickplay_thumbnail(file_id, timestamp_seconds):
     if timestamp < 0:
         return None
 
-    thumbnail_path = get_trickplay_thumbnail_path(
-        file_id,
-        timestamp,
-    )
+    frame_number = timestamp // TRICKPLAY_INTERVAL_SECONDS
 
-    if os.path.isfile(thumbnail_path) and os.path.getsize(thumbnail_path) > 0:
-        return thumbnail_path
+    try:
+        thumbnail_path = get_trickplay_frame_path(
+            file_id,
+            frame_number,
+        )
+    except (OSError, ValueError, TypeError):
+        return None
+
+    try:
+        if os.path.isfile(thumbnail_path) and os.path.getsize(thumbnail_path) > 0:
+            return thumbnail_path
+    except OSError:
+        return None
 
     return None
 
 
 def delete_trickplay_cache(file_id):
+    """Delete all trick-play JPEGs for one video."""
+
     if not file_id:
         return False
 
-    cache_directory = get_trickplay_cache_dir(file_id)
+    try:
+        cache_directory = get_trickplay_cache_dir(file_id)
+    except (OSError, ValueError, TypeError):
+        return False
 
     if not os.path.exists(cache_directory):
         return True

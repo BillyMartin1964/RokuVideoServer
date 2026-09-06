@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Modified on 9/1/2026"""
+"""Roku Media Hub FastAPI server."""
 
 import os
 import queue
@@ -45,13 +45,9 @@ START_TIME = time.time()
 # ============================================================================
 
 THUMBNAIL_QUEUE: queue.Queue[str] = queue.Queue()
-
 THUMBNAIL_QUEUE_LOCK = threading.Lock()
-
 THUMBNAIL_QUEUED: set[str] = set()
-
 THUMBNAIL_WORKER_STOP = threading.Event()
-
 THUMBNAIL_WORKER_THREAD: threading.Thread | None = None
 
 
@@ -76,7 +72,10 @@ def queue_thumbnail_generation(file_id: str, file_path: str) -> bool:
     except (OSError, ValueError, TypeError):
         return False
 
-    if os.path.exists(thumbnail_path) and os.path.getsize(thumbnail_path) > 0:
+    try:
+        if os.path.exists(thumbnail_path) and os.path.getsize(thumbnail_path) > 0:
+            return False
+    except OSError:
         return False
 
     with THUMBNAIL_QUEUE_LOCK:
@@ -175,7 +174,7 @@ def thumbnail_worker() -> None:
 
 
 def queue_missing_thumbnails() -> int:
-    """Find indexed videos without cached thumbnails and queue those videos."""
+    """Find indexed videos without cached thumbnails and queue them."""
 
     queued_count = 0
 
@@ -206,10 +205,7 @@ def queue_missing_thumbnails() -> int:
             queued_count += 1
 
     if queued_count > 0:
-        log(
-            f"--> Queued {queued_count} missing thumbnails "
-            f"for background generation."
-        )
+        log(f"--> Queued {queued_count} missing thumbnails for background generation.")
 
     return queued_count
 
@@ -246,482 +242,64 @@ def stop_thumbnail_worker() -> None:
 
 
 # ============================================================================
-# Background Trick-Play Generation
+# Trick-Play Helpers
 #
-# Trick-play uses FFmpeg directly to create JPEG thumbnails every 10 seconds.
+# Trick-play generation is intentionally NOT performed automatically yet.
 #
-# This is completely separate from the old Roku BIF system.
+# We are first proving the FFmpeg 9 -> JPEG pipeline using one video at a time
+# through Swagger.
 #
-# BIF generation remains disabled.
+# Once this is verified, a background trick-play worker can be added safely.
 # ============================================================================
 
-TRICKPLAY_QUEUE: queue.Queue[str] = queue.Queue()
 
-TRICKPLAY_QUEUE_LOCK = threading.Lock()
+def get_video_file_path(file_id: str) -> str | None:
+    """Return the filesystem path for an indexed video."""
 
-TRICKPLAY_QUEUED: set[str] = set()
+    if not file_id:
+        return None
 
-TRICKPLAY_WORKER_STOP = threading.Event()
+    with CACHE_LOCK:
+        item = config.FILE_MAP.get(file_id)
 
-TRICKPLAY_WORKER_THREAD: threading.Thread | None = None
+        if not isinstance(item, dict):
+            return None
+
+        file_path = item.get("path") or item.get("fullPath") or ""
+
+    file_path = str(file_path).strip()
+
+    if not file_path:
+        return None
+
+    return file_path
 
 
-def queue_trickplay_generation(file_id: str, file_path: str) -> bool:
-    """Queue trick-play JPEG generation for a video."""
+def get_trickplay_frame_path(
+    file_id: str,
+    frame_number: int,
+) -> str:
+    """Return the deterministic JPEG path for a trick-play frame.
 
-    if not file_id or not file_path:
-        return False
+    Frame numbering is zero-based:
 
-    if not os.path.isfile(file_path):
-        return False
+        000000.jpg = 0 seconds
+        000001.jpg = 10 seconds
+        000002.jpg = 20 seconds
+        etc.
+    """
+
+    if frame_number < 0:
+        raise ValueError("frame_number must be zero or greater")
 
     cache_directory = trickplay_service.get_trickplay_cache_dir(file_id)
 
-    try:
-        if os.path.isdir(cache_directory):
-            existing_files = [
-                name
-                for name in os.listdir(cache_directory)
-                if name.lower().endswith(".jpg")
-                and os.path.isfile(
-                    os.path.join(cache_directory, name)
-                )
-                and os.path.getsize(
-                    os.path.join(cache_directory, name)
-                ) > 0
-            ]
+    filename = f"{frame_number:06d}.jpg"
 
-            if existing_files:
-                return False
-
-    except (
-        OSError,
-        ValueError,
-        TypeError,
-    ):
-        return False
-
-    with TRICKPLAY_QUEUE_LOCK:
-        if file_id in TRICKPLAY_QUEUED:
-            return False
-
-        TRICKPLAY_QUEUED.add(file_id)
-
-    TRICKPLAY_QUEUE.put(file_id)
-
-    return True
-
-
-def trickplay_worker() -> None:
-    """Process trick-play JPEG generation jobs in the background.
-
-    Only one worker is used intentionally because FFmpeg trick-play
-    generation can be CPU and disk intensive.
-    """
-
-    log("--> Background trick-play worker started.")
-
-    while not TRICKPLAY_WORKER_STOP.is_set():
-        try:
-            file_id = TRICKPLAY_QUEUE.get(timeout=1.0)
-
-        except queue.Empty:
-            continue
-
-        try:
-            with CACHE_LOCK:
-                item = config.FILE_MAP.get(file_id)
-
-                if isinstance(item, dict):
-                    file_path = item.get("path") or item.get("fullPath") or ""
-                else:
-                    file_path = ""
-
-            if not file_path:
-                continue
-
-            if not os.path.isfile(file_path):
-                continue
-
-            cache_directory = trickplay_service.get_trickplay_cache_dir(
-                file_id
-            )
-
-            try:
-                if os.path.isdir(cache_directory):
-                    existing_files = [
-                        name
-                        for name in os.listdir(cache_directory)
-                        if name.lower().endswith(".jpg")
-                        and os.path.isfile(
-                            os.path.join(cache_directory, name)
-                        )
-                        and os.path.getsize(
-                            os.path.join(cache_directory, name)
-                        ) > 0
-                    ]
-
-                    if existing_files:
-                        continue
-
-            except OSError:
-                continue
-
-            log(
-                f"--> Background trick-play generation: "
-                f"{os.path.basename(file_path)}"
-            )
-
-            try:
-                generated = trickplay_service.generate_trickplay(
-                    file_id,
-                    file_path,
-                )
-
-                if generated:
-                    log(
-                        f"--> Background trick-play complete: "
-                        f"{os.path.basename(file_path)}"
-                    )
-                else:
-                    log(
-                        f"<!> Background trick-play unavailable: "
-                        f"{os.path.basename(file_path)}"
-                    )
-
-            except (
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-                subprocess.SubprocessError,
-            ) as ex:
-                log(
-                    f"<!> Background trick-play generation failed for "
-                    f"{os.path.basename(file_path)}: "
-                    f"{type(ex).__name__}: {ex}"
-                )
-
-        finally:
-            with TRICKPLAY_QUEUE_LOCK:
-                TRICKPLAY_QUEUED.discard(file_id)
-
-            TRICKPLAY_QUEUE.task_done()
-
-    log("--> Background trick-play worker stopped.")
-
-
-def queue_missing_trickplay() -> int:
-    """Find indexed videos without cached trick-play JPEGs."""
-
-    queued_count = 0
-
-    with CACHE_LOCK:
-        catalog_items = list(config.FILES_LIST)
-
-    for item in catalog_items:
-        if not isinstance(item, dict):
-            continue
-
-        file_id = str(item.get("id") or item.get("fileId") or "").strip()
-
-        if not file_id:
-            continue
-
-        file_path = str(item.get("path") or item.get("fullPath") or "").strip()
-
-        if not file_path:
-            continue
-
-        if not os.path.isfile(file_path):
-            continue
-
-        if queue_trickplay_generation(
-            file_id,
-            file_path,
-        ):
-            queued_count += 1
-
-    if queued_count > 0:
-        log(
-            f"--> Queued {queued_count} missing trick-play caches "
-            f"for background generation."
-        )
-
-    return queued_count
-
-
-def start_trickplay_worker() -> threading.Thread:
-    """Start the single background trick-play worker."""
-
-    global TRICKPLAY_WORKER_THREAD
-
-    TRICKPLAY_WORKER_STOP.clear()
-
-    worker_thread = threading.Thread(
-        target=trickplay_worker,
-        daemon=True,
-        name="TrickPlayGenerator",
+    return os.path.join(
+        cache_directory,
+        filename,
     )
-
-    worker_thread.start()
-
-    TRICKPLAY_WORKER_THREAD = worker_thread
-
-    return worker_thread
-
-
-def stop_trickplay_worker() -> None:
-    """Stop the trick-play worker cleanly."""
-
-    TRICKPLAY_WORKER_STOP.set()
-
-    worker_thread = TRICKPLAY_WORKER_THREAD
-
-    if worker_thread and worker_thread.is_alive():
-        worker_thread.join(timeout=5)
-
-
-# ============================================================================
-# Background BIF Generation
-#
-# TEMPORARILY DISABLED
-#
-# Roku's biftool_processor is linked against old FFmpeg 4-era libraries.
-#
-# The current Mac installation uses FFmpeg 9.
-#
-# DO NOT enable this section.
-# ============================================================================
-
-# BIF_QUEUE: queue.Queue[str] = queue.Queue()
-#
-# BIF_QUEUE_LOCK = threading.Lock()
-#
-# BIF_QUEUED: set[str] = set()
-#
-# BIF_WORKER_STOP = threading.Event()
-#
-# BIF_WORKER_THREAD: threading.Thread | None = None
-
-
-# def queue_bif_generation(file_id: str, file_path: str) -> bool:
-#     """Queue a video BIF for background generation.
-#
-#     TEMPORARILY DISABLED.
-#     """
-#
-#     if not file_id or not file_path:
-#         return False
-#
-#     if not os.path.isfile(file_path):
-#         return False
-#
-#     bif_path = bif_service.get_bif_path(file_id)
-#
-#     if os.path.exists(bif_path) and os.path.getsize(bif_path) > 0:
-#         return False
-#
-#     with BIF_QUEUE_LOCK:
-#         if file_id in BIF_QUEUED:
-#             return False
-#
-#         BIF_QUEUED.add(file_id)
-#
-#     BIF_QUEUE.put(file_id)
-#
-#     return True
-
-
-# def bif_worker() -> None:
-#     """Process BIF generation jobs in the background.
-#
-#     TEMPORARILY DISABLED.
-#     """
-#
-#     log("--> Background BIF worker started.")
-#
-#     while not BIF_WORKER_STOP.is_set():
-#         try:
-#             file_id = BIF_QUEUE.get(timeout=1.0)
-#
-#         except queue.Empty:
-#             continue
-#
-#         try:
-#             with CACHE_LOCK:
-#                 item = config.FILE_MAP.get(file_id)
-#
-#                 if isinstance(item, dict):
-#                     file_path = item.get("path") or item.get("fullPath") or ""
-#                 else:
-#                     file_path = ""
-#
-#             if not file_path:
-#                 continue
-#
-#             if not os.path.isfile(file_path):
-#                 continue
-#
-#             bif_path = bif_service.get_bif_path(file_id)
-#
-#             try:
-#                 if os.path.exists(bif_path) and os.path.getsize(bif_path) > 0:
-#                     continue
-#
-#             except OSError:
-#                 continue
-#
-#             log(f"--> Background BIF generation: {os.path.basename(file_path)}")
-#
-#             try:
-#                 generated = bif_service.generate_bif(
-#                     file_id,
-#                     file_path,
-#                 )
-#
-#                 if generated:
-#                     log(f"--> Background BIF complete: {os.path.basename(file_path)}")
-#                 else:
-#                     log(
-#                         f"<!> Background BIF unavailable: {os.path.basename(file_path)}"
-#                     )
-#
-#             except (
-#                 OSError,
-#                 RuntimeError,
-#                 ValueError,
-#                 TypeError,
-#                 subprocess.SubprocessError,
-#             ) as ex:
-#                 log(
-#                     f"<!> Background BIF generation failed for "
-#                     f"{os.path.basename(file_path)}: "
-#                     f"{type(ex).__name__}: {ex}"
-#                 )
-#
-#         finally:
-#             with BIF_QUEUE_LOCK:
-#                 BIF_QUEUED.discard(file_id)
-#
-#             BIF_QUEUE.task_done()
-#
-#     log("--> Background BIF worker stopped.")
-
-
-# def queue_missing_bifs() -> int:
-#     """Find indexed videos without cached BIF files and queue those videos.
-#
-#     TEMPORARILY DISABLED.
-#     """
-#
-#     queued_count = 0
-#
-#     with CACHE_LOCK:
-#         catalog_items = list(config.FILES_LIST)
-#
-#     for item in catalog_items:
-#         if not isinstance(item, dict):
-#             continue
-#
-#         file_id = str(item.get("id") or item.get("fileId") or "").strip()
-#
-#         if not file_id:
-#             continue
-#
-#         file_path = str(item.get("path") or item.get("fullPath") or "").strip()
-#
-#         if not file_path:
-#             continue
-#
-#         if not os.path.isfile(file_path):
-#             continue
-#
-#         if queue_bif_generation(
-#             file_id,
-#             file_path,
-#         ):
-#             queued_count += 1
-#
-#     if queued_count > 0:
-#         log(f"--> Queued {queued_count} missing BIFs for background generation.")
-#
-#     return queued_count
-
-
-# def start_bif_worker() -> threading.Thread:
-#     """Start the single background BIF worker.
-#
-#     TEMPORARILY DISABLED.
-#     """
-#
-#     global BIF_WORKER_THREAD
-#
-#     BIF_WORKER_STOP.clear()
-#
-#     worker_thread = threading.Thread(
-#         target=bif_worker,
-#         daemon=True,
-#         name="BifGenerator",
-#     )
-#
-#     worker_thread.start()
-#
-#     BIF_WORKER_THREAD = worker_thread
-#
-#     return worker_thread
-
-
-# def stop_bif_worker() -> None:
-#     """Stop the BIF worker cleanly.
-#
-#     TEMPORARILY DISABLED.
-#     """
-#
-#     BIF_WORKER_STOP.set()
-#
-#     worker_thread = BIF_WORKER_THREAD
-#
-#     if worker_thread and worker_thread.is_alive():
-#         worker_thread.join(timeout=5)
-
-
-# ============================================================================
-# Client / Network Helpers
-# ============================================================================
-
-
-def get_local_ip():
-    try:
-        sock = socket.socket(
-            socket.AF_INET,
-            socket.SOCK_DGRAM,
-        )
-
-        sock.connect(("8.8.8.8", 80))
-
-        ip = sock.getsockname()[0]
-
-        sock.close()
-
-        if ip:
-            return ip
-
-    except OSError as e:
-        log(f"<!> Could not determine local IP via socket: {e}")
-
-    try:
-        hostname = socket.gethostname()
-
-        ip = socket.gethostbyname(hostname)
-
-        if ip and not ip.startswith("127."):
-            return ip
-
-    except OSError as e:
-        log(f"<!> Could not determine local IP via hostname: {e}")
-
-    return "127.0.0.1"
 
 
 # ============================================================================
@@ -738,7 +316,7 @@ class SetAuthorizedDrivesRequest(BaseModel):
                 "/Volumes/External1",
             ]
         },
-        description="List of drive mount points authorized for API access.",
+        description=("List of drive mount points authorized for API access."),
     )
 
 
@@ -782,29 +360,25 @@ async def lifespan(app: FastAPI):
     log("Starting services...")
     log_separator()
 
+    # ------------------------------------------------------------------------
+    # FFmpeg
+    # ------------------------------------------------------------------------
+
     ffmpeg_service.initialize_ffmpeg()
 
-    # =========================================================================
-    # BIF GENERATION REMAINS DISABLED
-    # =========================================================================
-
-    # bif_service.initialize_biftool()
+    # ------------------------------------------------------------------------
+    # Normal thumbnail/cache initialization
+    # ------------------------------------------------------------------------
 
     video_model_service.ensure_default_poster()
 
     video_service.load_disk_cache()
 
     # ------------------------------------------------------------------------
-    # Start the normal thumbnail worker.
+    # Start normal thumbnail worker.
     # ------------------------------------------------------------------------
 
     start_thumbnail_worker()
-
-    # ------------------------------------------------------------------------
-    # Start the trick-play worker.
-    # ------------------------------------------------------------------------
-
-    start_trickplay_worker()
 
     # ------------------------------------------------------------------------
     # Catalog scanner
@@ -831,18 +405,6 @@ async def lifespan(app: FastAPI):
     queue_missing_thumbnails()
 
     # ------------------------------------------------------------------------
-    # Initial missing trick-play discovery
-    # ------------------------------------------------------------------------
-
-    queue_missing_trickplay()
-
-    # =========================================================================
-    # BIF DISCOVERY REMAINS DISABLED
-    # =========================================================================
-
-    # queue_missing_bifs()
-
-    # ------------------------------------------------------------------------
     # Background thumbnail monitor
     # ------------------------------------------------------------------------
 
@@ -859,10 +421,7 @@ async def lifespan(app: FastAPI):
                 ValueError,
                 TypeError,
             ) as ex:
-                log(
-                    f"<!> Thumbnail monitor error: "
-                    f"{type(ex).__name__}: {ex}"
-                )
+                log(f"<!> Thumbnail monitor error: {type(ex).__name__}: {ex}")
 
             THUMBNAIL_WORKER_STOP.wait(timeout=10)
 
@@ -875,75 +434,6 @@ async def lifespan(app: FastAPI):
     )
 
     thumbnail_monitor_thread.start()
-
-    # ------------------------------------------------------------------------
-    # Background trick-play monitor
-    #
-    # This watches the catalog for videos that are newly indexed after
-    # startup and queues trick-play generation for them.
-    # ------------------------------------------------------------------------
-
-    def trickplay_monitor_loop():
-        log("--> Background trick-play monitor started.")
-
-        while not TRICKPLAY_WORKER_STOP.is_set():
-            try:
-                queue_missing_trickplay()
-
-            except (
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-            ) as ex:
-                log(
-                    f"<!> Trick-play monitor error: "
-                    f"{type(ex).__name__}: {ex}"
-                )
-
-            TRICKPLAY_WORKER_STOP.wait(timeout=10)
-
-        log("--> Background trick-play monitor stopped.")
-
-    trickplay_monitor_thread = threading.Thread(
-        target=trickplay_monitor_loop,
-        daemon=True,
-        name="TrickPlayMonitor",
-    )
-
-    trickplay_monitor_thread.start()
-
-    # =========================================================================
-    # BIF MONITOR REMAINS DISABLED
-    # =========================================================================
-
-    # def bif_monitor_loop():
-    #     log("--> Background BIF monitor started.")
-    #
-    #     while not BIF_WORKER_STOP.is_set():
-    #         try:
-    #             queue_missing_bifs()
-    #
-    #         except (
-    #             OSError,
-    #             RuntimeError,
-    #             ValueError,
-    #             TypeError,
-    #         ) as ex:
-    #             log(f"<!> BIF monitor error: {type(ex).__name__}: {ex}")
-    #
-    #         BIF_WORKER_STOP.wait(timeout=10)
-    #
-    #     log("--> Background BIF monitor stopped.")
-    #
-    #
-    # bif_monitor_thread = threading.Thread(
-    #     target=bif_monitor_loop,
-    #     daemon=True,
-    #     name="BifMonitor",
-    # )
-    #
-    # bif_monitor_thread.start()
 
     # ------------------------------------------------------------------------
     # Server information
@@ -972,14 +462,6 @@ async def lifespan(app: FastAPI):
 
     stop_thumbnail_worker()
 
-    stop_trickplay_worker()
-
-    # =========================================================================
-    # BIF WORKER SHUTDOWN REMAINS DISABLED
-    # =========================================================================
-
-    # stop_bif_worker()
-
 
 # ============================================================================
 # FastAPI Application
@@ -990,7 +472,7 @@ app = FastAPI(
     title="Roku Media Hub API",
     description=(
         "FastAPI server providing media indexing, directory browsing, "
-        "video models, thumbnails, and video streaming for Roku."
+        "video models, thumbnails, trick-play JPEGs, and video streaming."
     ),
     version="1.0.0",
     docs_url="/docs",
@@ -1015,7 +497,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def track_connected_clients(request: Request, call_next):
-    """Tracks unique client IPs and their last active timestamps."""
+    """Track unique client IPs and their last active timestamps."""
 
     client_ip = request.client.host if request.client else "unknown"
 
@@ -1037,14 +519,13 @@ async def track_connected_clients(request: Request, call_next):
     tags=["Health"],
 )
 def get_health(request: Request):
-    """Return server health and status information including client metrics."""
+    """Return server health and status information."""
 
     base_response = api_health.handle_get_health(request)
 
     now = time.time()
 
     five_mins_ago = now - 300
-
     twenty_four_hours_ago = now - 86400
 
     with CLIENT_LOCK:
@@ -1060,9 +541,7 @@ def get_health(request: Request):
 
     if isinstance(base_response, dict):
         base_response["activeClients"] = active_clients
-
         base_response["clients24h"] = clients_24h
-
         base_response["start_time"] = START_TIME
 
         if "driveCount" not in base_response and "drive_count" not in base_response:
@@ -1078,12 +557,11 @@ def get_health(request: Request):
     tags=["Health"],
 )
 def get_connected_clients():
-    """Return connected client analytics and recently seen IP addresses."""
+    """Return connected client analytics."""
 
     now = time.time()
 
     five_mins_ago = now - 300
-
     twenty_four_hours_ago = now - 86400
 
     with CLIENT_LOCK:
@@ -1141,11 +619,7 @@ def get_drives(
         description=("Set to true to return all drives with authorization status."),
     ),
 ):
-    """
-    Return available physical drives and volume metadata.
-
-    Defaults to returning authorized drives only.
-    """
+    """Return available physical drives and volume metadata."""
 
     return api_drives.handle_get_drives(
         request,
@@ -1169,13 +643,7 @@ def get_directories(
         description="Optional drive name filter.",
     ),
 ):
-    """
-    Return directories.
-
-    Without a drive parameter, returns directories for all drives.
-
-    With a drive parameter, returns directories for that drive.
-    """
+    """Return directories for one drive or all drives."""
 
     if drive:
         return api_directories.handle_get_directories_by_drive(
@@ -1251,17 +719,10 @@ def get_video_models(
         60,
         ge=0,
         le=500,
-        description="Maximum number of videos to return. Use 0 for all.",
+        description=("Maximum number of videos to return. Use 0 for all."),
     ),
 ):
-    """
-    Return VideoModels.
-
-    This endpoint returns video metadata and URLs for the videos
-    matching the optional drive and directory filters.
-
-    It does not return video file bytes.
-    """
+    """Return VideoModels matching the requested filters."""
 
     return api_video_models.handle_get_video_models(
         request,
@@ -1275,7 +736,7 @@ def get_video_models(
 # ============================================================================
 # VIDEO MODEL SEARCH
 #
-# This route MUST appear before /api/video-models/{file_id}.
+# This route must appear before /api/video-models/{file_id}.
 # ============================================================================
 
 
@@ -1343,9 +804,7 @@ def search_video_models(
         ),
     ] = 0,
 ):
-    """
-    Search VideoModels using flexible text matching.
-    """
+    """Search VideoModels using flexible text matching."""
 
     return api_video_models.handle_search_video_models(
         request=request,
@@ -1367,9 +826,7 @@ def get_video_model(
     request: Request,
     file_id: str,
 ):
-    """
-    Return the complete VideoModel for one video.
-    """
+    """Return the complete VideoModel for one video."""
 
     return api_video_models.handle_get_video_model(
         request,
@@ -1385,9 +842,7 @@ def get_video_model_thumbnail(
     request: Request,
     file_id: str,
 ):
-    """
-    Return the actual JPEG thumbnail for a video.
-    """
+    """Return the actual JPEG thumbnail for a video."""
 
     return api_video_models.handle_get_thumbnail(
         request,
@@ -1396,58 +851,233 @@ def get_video_model_thumbnail(
 
 
 # ============================================================================
-# TRICK-PLAY / BIF ENDPOINT
-#
-# NOTE:
-# The existing BIF endpoint remains untouched for now.
-#
-# The new JPEG trick-play generation runs independently in the background.
-# We will replace this endpoint with the JPEG-serving endpoint after we
-# confirm generation is working correctly.
+# TRICK-PLAY GENERATION
+# ============================================================================
+
+
+@app.post(
+    "/api/trickplay/generate/{file_id}",
+    tags=["Trick-Play"],
+)
+def generate_trickplay(
+    file_id: str,
+):
+    """Generate trick-play JPEGs for exactly one indexed video.
+
+    This endpoint is intentionally manual while the FFmpeg 9 trick-play
+    pipeline is being tested.
+
+    It does not scan the catalog and does not queue other videos.
+    """
+
+    file_path = get_video_file_path(file_id)
+
+    if not file_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video Not Found",
+        )
+
+    if not os.path.isfile(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video File Not Found",
+        )
+
+    try:
+        cache_directory = trickplay_service.get_trickplay_cache_dir(file_id)
+
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+    ) as ex:
+        log(
+            f"<!> Could not determine trick-play cache directory "
+            f"for {file_id}: {type(ex).__name__}: {ex}"
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not determine trick-play cache directory.",
+        ) from ex
+
+    try:
+        os.makedirs(
+            cache_directory,
+            exist_ok=True,
+        )
+
+    except OSError as ex:
+        log(
+            f"<!> Could not create trick-play cache directory "
+            f"for {file_id}: {type(ex).__name__}: {ex}"
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not create trick-play cache directory.",
+        ) from ex
+
+    log(f"--> Manual trick-play generation requested: {os.path.basename(file_path)}")
+
+    try:
+        trickplay_service.generate_trickplay(
+            file_id,
+            file_path,
+        )
+
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        subprocess.SubprocessError,
+    ) as ex:
+        log(
+            f"<!> Trick-play generation failed for "
+            f"{os.path.basename(file_path)}: "
+            f"{type(ex).__name__}: {ex}"
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(f"Trick-play generation failed: {type(ex).__name__}: {ex}"),
+        ) from ex
+
+    # ------------------------------------------------------------------------
+    # Verify that actual JPEGs now exist.
+    #
+    # We deliberately verify the filesystem instead of relying on the return
+    # value from generate_trickplay(). This makes the Swagger test useful even
+    # if the service returns None or another truthy value.
+    # ------------------------------------------------------------------------
+
+    try:
+        generated_files = []
+
+        for name in os.listdir(cache_directory):
+            if not name.lower().endswith(".jpg"):
+                continue
+
+            frame_path = os.path.join(
+                cache_directory,
+                name,
+            )
+
+            if not os.path.isfile(frame_path):
+                continue
+
+            try:
+                if os.path.getsize(frame_path) <= 0:
+                    continue
+            except OSError:
+                continue
+
+            generated_files.append(name)
+
+    except OSError as ex:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Trick-play cache could not be inspected.",
+        ) from ex
+
+    generated_files.sort()
+
+    if not generated_files:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=("FFmpeg completed but no trick-play JPEGs were found."),
+        )
+
+    return {
+        "success": True,
+        "message": ("Trick-play JPEG generation completed successfully."),
+        "fileId": file_id,
+        "fileName": os.path.basename(file_path),
+        "intervalSeconds": (trickplay_service.TRICKPLAY_INTERVAL_SECONDS),
+        "width": trickplay_service.TRICKPLAY_WIDTH,
+        "height": trickplay_service.TRICKPLAY_HEIGHT,
+        "count": len(generated_files),
+        "files": generated_files,
+    }
+
+
+# ============================================================================
+# TRICK-PLAY JPEG RETRIEVAL
 # ============================================================================
 
 
 @app.get(
-    "/api/trickplay/{file_id}",
-    tags=["Video Models"],
+    "/api/trickplay/{file_id}/{frame_number}",
+    tags=["Trick-Play"],
 )
-def get_trick_play(
+def get_trickplay_frame(
     file_id: str,
+    frame_number: int,
 ):
+    """Return one generated trick-play JPEG.
+
+    Frame numbering is zero-based:
+
+        000000.jpg = 0 seconds
+        000001.jpg = 10 seconds
+        000002.jpg = 20 seconds
+        etc.
     """
-    Return the existing Roku BIF trick-play file for a video.
 
-    BIF generation remains disabled.
-    """
-
-    bif_path = os.path.join(
-        config.BIF_CACHE_DIR,
-        f"{file_id}.bif",
-    )
-
-    if not os.path.isfile(bif_path):
+    if frame_number < 0:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Trick-play BIF Not Found",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Frame number must be zero or greater.",
         )
 
     try:
-        if os.path.getsize(bif_path) <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Trick-play BIF Not Found",
-            )
+        frame_path = get_trickplay_frame_path(
+            file_id,
+            frame_number,
+        )
 
-    except OSError:
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+    ) as ex:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid trick-play frame request: {ex}",
+        ) from ex
+
+    if not os.path.isfile(frame_path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Trick-play BIF Not Found",
+            detail="Trick-play JPEG Not Found",
+        )
+
+    try:
+        frame_size = os.path.getsize(frame_path)
+
+    except OSError as ex:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Trick-play JPEG Not Found",
+        ) from ex
+
+    if frame_size <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Trick-play JPEG Not Found",
         )
 
     return FileResponse(
-        path=bif_path,
-        media_type="application/octet-stream",
-        filename=f"{file_id}.bif",
+        path=frame_path,
+        media_type="image/jpeg",
+        filename=os.path.basename(frame_path),
+        headers={
+            "Cache-Control": ("public, max-age=31536000, immutable"),
+            "X-TrickPlay-Frame": str(frame_number),
+            "X-TrickPlay-Interval": str(trickplay_service.TRICKPLAY_INTERVAL_SECONDS),
+        },
     )
 
 
@@ -1560,6 +1190,53 @@ def stream_video(
         file_path,
         send_body=send_body,
     )
+
+
+# ============================================================================
+# Client / Network Helpers
+# ============================================================================
+
+
+def get_local_ip() -> str:
+    """Determine the Mac's LAN IP address."""
+
+    sock: socket.socket | None = None
+
+    try:
+        sock = socket.socket(
+            socket.AF_INET,
+            socket.SOCK_DGRAM,
+        )
+
+        sock.connect(("8.8.8.8", 80))
+
+        ip = sock.getsockname()[0]
+
+        if ip:
+            return ip
+
+    except OSError as ex:
+        log(f"<!> Could not determine local IP via socket: {ex}")
+
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    try:
+        hostname = socket.gethostname()
+
+        ip = socket.gethostbyname(hostname)
+
+        if ip and not ip.startswith("127."):
+            return ip
+
+    except OSError as ex:
+        log(f"<!> Could not determine local IP via hostname: {ex}")
+
+    return "127.0.0.1"
 
 
 # ============================================================================
