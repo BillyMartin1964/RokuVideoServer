@@ -33,6 +33,38 @@ def get_file_id(full_path: str) -> str:
     return hashlib.md5(normalized_path.encode("utf-8")).hexdigest()
 
 
+def get_file_size(full_path: str) -> int:
+    """Returns the file size in bytes using a filesystem fallback if needed."""
+    try:
+        file_size = os.path.getsize(full_path)
+
+        if file_size > 0:
+            return file_size
+
+    except OSError:
+        pass
+
+    try:
+        result = subprocess.run(
+            ["stat", "-f", "%z", full_path],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+
+        if result.returncode == 0:
+            file_size = int(result.stdout.strip())
+
+            if file_size > 0:
+                return file_size
+
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+
+    return 0
+
+
 def get_video_format_info(file_path: str) -> dict:
     extension = os.path.splitext(file_path)[1].lower()
     info = VIDEO_FORMATS.get(extension)
@@ -84,6 +116,16 @@ def load_disk_cache():
             if isinstance(item, dict):
                 # Standardize through VideoModel contract
                 model_dict = create_video_model(item).model_dump()
+
+                if model_dict.get("fileSize", 0) == 0:
+                    full_path = model_dict.get("fullPath") or model_dict.get("path")
+
+                    if full_path:
+                        file_size = get_file_size(full_path)
+
+                        if file_size > 0:
+                            model_dict["fileSize"] = file_size
+
                 file_id = model_dict.get("id")
 
                 if file_id:
@@ -182,10 +224,7 @@ def try_spotlight_index_scan():
                 rel_dir if not rel_dir or rel_dir.startswith("/") else "/" + rel_dir
             )
 
-            try:
-                file_size = os.path.getsize(full_path)
-            except OSError:
-                file_size = 0
+            file_size = get_file_size(full_path)
 
             raw_item = {
                 "id": file_id,
@@ -272,10 +311,7 @@ def safe_scan_directory(
                         else "/" + rel_path
                     )
 
-                    try:
-                        file_size = entry.stat(follow_symlinks=False).st_size
-                    except OSError:
-                        file_size = 0
+                    file_size = get_file_size(full_path)
 
                     raw_item = {
                         "id": file_id,
