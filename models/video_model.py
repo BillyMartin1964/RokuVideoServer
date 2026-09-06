@@ -75,6 +75,8 @@ class VideoModel(BaseModel):
     # Video metadata
     # ------------------------------------------------------------------------
 
+    fileSize: int = 0
+
     description: str = ""
 
     duration: int = 0
@@ -199,6 +201,19 @@ def create_video_model(
     # ------------------------------------------------------------------------
 
     description = str(data.get("description") or "")
+
+    # ------------------------------------------------------------------------
+    # File size
+    #
+    # Stored in bytes.
+    # ------------------------------------------------------------------------
+
+    file_size_value = data.get("fileSize") or data.get("size") or 0
+
+    try:
+        file_size = int(file_size_value)
+    except (TypeError, ValueError):
+        file_size = 0
 
     # ------------------------------------------------------------------------
     # Duration
@@ -351,6 +366,7 @@ def create_video_model(
         fullPath=raw_path,
         streamUrl=stream_url,
         description=description,
+        fileSize=file_size,
         duration=duration,
         height=height,
         width=width,
