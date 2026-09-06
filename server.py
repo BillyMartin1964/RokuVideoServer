@@ -24,16 +24,8 @@ import api.videos as api_videos
 import config
 from config import CACHE_LOCK, PORT, log, log_separator
 from services import (
-    # BIF GENERATION TEMPORARILY DISABLED.
-    #
-    # Roku's biftool_processor currently requires old FFmpeg 4-era
-    # dynamic libraries that are not provided by the installed
-    # FFmpeg 9 Homebrew installation.
-    #
-    # The BIF service remains in the project for later use.
-    #
-    # bif_service,
     ffmpeg_service,
+    trickplay_service,
     video_model_service,
     video_service,
     watcher_service,
@@ -102,13 +94,6 @@ def thumbnail_worker() -> None:
     """Process thumbnail generation jobs in the background.
 
     Only one worker is used intentionally.
-
-    Thumbnail creation can invoke FFmpeg or QuickLook, both of which
-    can consume meaningful CPU and disk resources. A single worker
-    prevents a large catalog scan from launching hundreds of
-    simultaneous thumbnail processes.
-
-    Thumbnail failures are isolated from the catalog and API.
     """
 
     log("--> Background thumbnail worker started.")
@@ -190,16 +175,7 @@ def thumbnail_worker() -> None:
 
 
 def queue_missing_thumbnails() -> int:
-    """Find indexed videos without cached thumbnails and queue those videos.
-
-    This function does not generate thumbnails itself.
-
-    It only identifies missing thumbnail files and adds those videos
-    to the background thumbnail queue.
-
-    Returns:
-        Number of newly queued thumbnail jobs.
-    """
+    """Find indexed videos without cached thumbnails and queue those videos."""
 
     queued_count = 0
 
@@ -230,7 +206,10 @@ def queue_missing_thumbnails() -> int:
             queued_count += 1
 
     if queued_count > 0:
-        log(f"--> Queued {queued_count} missing thumbnails for background generation.")
+        log(
+            f"--> Queued {queued_count} missing thumbnails "
+            f"for background generation."
+        )
 
     return queued_count
 
@@ -267,23 +246,252 @@ def stop_thumbnail_worker() -> None:
 
 
 # ============================================================================
+# Background Trick-Play Generation
+#
+# Trick-play uses FFmpeg directly to create JPEG thumbnails every 10 seconds.
+#
+# This is completely separate from the old Roku BIF system.
+#
+# BIF generation remains disabled.
+# ============================================================================
+
+TRICKPLAY_QUEUE: queue.Queue[str] = queue.Queue()
+
+TRICKPLAY_QUEUE_LOCK = threading.Lock()
+
+TRICKPLAY_QUEUED: set[str] = set()
+
+TRICKPLAY_WORKER_STOP = threading.Event()
+
+TRICKPLAY_WORKER_THREAD: threading.Thread | None = None
+
+
+def queue_trickplay_generation(file_id: str, file_path: str) -> bool:
+    """Queue trick-play JPEG generation for a video."""
+
+    if not file_id or not file_path:
+        return False
+
+    if not os.path.isfile(file_path):
+        return False
+
+    cache_directory = trickplay_service.get_trickplay_cache_dir(file_id)
+
+    try:
+        if os.path.isdir(cache_directory):
+            existing_files = [
+                name
+                for name in os.listdir(cache_directory)
+                if name.lower().endswith(".jpg")
+                and os.path.isfile(
+                    os.path.join(cache_directory, name)
+                )
+                and os.path.getsize(
+                    os.path.join(cache_directory, name)
+                ) > 0
+            ]
+
+            if existing_files:
+                return False
+
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+    ):
+        return False
+
+    with TRICKPLAY_QUEUE_LOCK:
+        if file_id in TRICKPLAY_QUEUED:
+            return False
+
+        TRICKPLAY_QUEUED.add(file_id)
+
+    TRICKPLAY_QUEUE.put(file_id)
+
+    return True
+
+
+def trickplay_worker() -> None:
+    """Process trick-play JPEG generation jobs in the background.
+
+    Only one worker is used intentionally because FFmpeg trick-play
+    generation can be CPU and disk intensive.
+    """
+
+    log("--> Background trick-play worker started.")
+
+    while not TRICKPLAY_WORKER_STOP.is_set():
+        try:
+            file_id = TRICKPLAY_QUEUE.get(timeout=1.0)
+
+        except queue.Empty:
+            continue
+
+        try:
+            with CACHE_LOCK:
+                item = config.FILE_MAP.get(file_id)
+
+                if isinstance(item, dict):
+                    file_path = item.get("path") or item.get("fullPath") or ""
+                else:
+                    file_path = ""
+
+            if not file_path:
+                continue
+
+            if not os.path.isfile(file_path):
+                continue
+
+            cache_directory = trickplay_service.get_trickplay_cache_dir(
+                file_id
+            )
+
+            try:
+                if os.path.isdir(cache_directory):
+                    existing_files = [
+                        name
+                        for name in os.listdir(cache_directory)
+                        if name.lower().endswith(".jpg")
+                        and os.path.isfile(
+                            os.path.join(cache_directory, name)
+                        )
+                        and os.path.getsize(
+                            os.path.join(cache_directory, name)
+                        ) > 0
+                    ]
+
+                    if existing_files:
+                        continue
+
+            except OSError:
+                continue
+
+            log(
+                f"--> Background trick-play generation: "
+                f"{os.path.basename(file_path)}"
+            )
+
+            try:
+                generated = trickplay_service.generate_trickplay(
+                    file_id,
+                    file_path,
+                )
+
+                if generated:
+                    log(
+                        f"--> Background trick-play complete: "
+                        f"{os.path.basename(file_path)}"
+                    )
+                else:
+                    log(
+                        f"<!> Background trick-play unavailable: "
+                        f"{os.path.basename(file_path)}"
+                    )
+
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+                subprocess.SubprocessError,
+            ) as ex:
+                log(
+                    f"<!> Background trick-play generation failed for "
+                    f"{os.path.basename(file_path)}: "
+                    f"{type(ex).__name__}: {ex}"
+                )
+
+        finally:
+            with TRICKPLAY_QUEUE_LOCK:
+                TRICKPLAY_QUEUED.discard(file_id)
+
+            TRICKPLAY_QUEUE.task_done()
+
+    log("--> Background trick-play worker stopped.")
+
+
+def queue_missing_trickplay() -> int:
+    """Find indexed videos without cached trick-play JPEGs."""
+
+    queued_count = 0
+
+    with CACHE_LOCK:
+        catalog_items = list(config.FILES_LIST)
+
+    for item in catalog_items:
+        if not isinstance(item, dict):
+            continue
+
+        file_id = str(item.get("id") or item.get("fileId") or "").strip()
+
+        if not file_id:
+            continue
+
+        file_path = str(item.get("path") or item.get("fullPath") or "").strip()
+
+        if not file_path:
+            continue
+
+        if not os.path.isfile(file_path):
+            continue
+
+        if queue_trickplay_generation(
+            file_id,
+            file_path,
+        ):
+            queued_count += 1
+
+    if queued_count > 0:
+        log(
+            f"--> Queued {queued_count} missing trick-play caches "
+            f"for background generation."
+        )
+
+    return queued_count
+
+
+def start_trickplay_worker() -> threading.Thread:
+    """Start the single background trick-play worker."""
+
+    global TRICKPLAY_WORKER_THREAD
+
+    TRICKPLAY_WORKER_STOP.clear()
+
+    worker_thread = threading.Thread(
+        target=trickplay_worker,
+        daemon=True,
+        name="TrickPlayGenerator",
+    )
+
+    worker_thread.start()
+
+    TRICKPLAY_WORKER_THREAD = worker_thread
+
+    return worker_thread
+
+
+def stop_trickplay_worker() -> None:
+    """Stop the trick-play worker cleanly."""
+
+    TRICKPLAY_WORKER_STOP.set()
+
+    worker_thread = TRICKPLAY_WORKER_THREAD
+
+    if worker_thread and worker_thread.is_alive():
+        worker_thread.join(timeout=5)
+
+
+# ============================================================================
 # Background BIF Generation
 #
 # TEMPORARILY DISABLED
 #
-# Roku's biftool_processor is linked against old FFmpeg 4-era libraries:
-#
-#     libavformat.58.dylib
-#     libavcodec.58.dylib
-#     libavutil.56.dylib
-#     libswscale.5.dylib
+# Roku's biftool_processor is linked against old FFmpeg 4-era libraries.
 #
 # The current Mac installation uses FFmpeg 9.
 #
-# DO NOT enable this section until the biftool dependency problem has been
-# solved independently of the working server/thumbnail system.
-#
-# The code is intentionally preserved here for later restoration.
+# DO NOT enable this section.
 # ============================================================================
 
 # BIF_QUEUE: queue.Queue[str] = queue.Queue()
@@ -577,14 +785,7 @@ async def lifespan(app: FastAPI):
     ffmpeg_service.initialize_ffmpeg()
 
     # =========================================================================
-    # BIF GENERATION TEMPORARILY DISABLED
-    #
-    # Do not initialize biftool here.
-    #
-    # The Roku biftool_processor currently requires old FFmpeg libraries
-    # that are incompatible with the current FFmpeg installation.
-    #
-    # The working server must remain independent of BIF generation.
+    # BIF GENERATION REMAINS DISABLED
     # =========================================================================
 
     # bif_service.initialize_biftool()
@@ -594,29 +795,19 @@ async def lifespan(app: FastAPI):
     video_service.load_disk_cache()
 
     # ------------------------------------------------------------------------
-    # Start the thumbnail worker BEFORE catalog scanning begins.
-    #
-    # The worker simply waits for jobs. It does not scan or generate
-    # anything until jobs are placed into THUMBNAIL_QUEUE.
+    # Start the normal thumbnail worker.
     # ------------------------------------------------------------------------
 
     start_thumbnail_worker()
 
-    # =========================================================================
-    # BIF WORKER TEMPORARILY DISABLED
-    #
-    # The BIF worker is intentionally not started.
-    #
-    # BIF generation will be restored after the Roku biftool FFmpeg
-    # dependency has been solved independently.
-    # =========================================================================
+    # ------------------------------------------------------------------------
+    # Start the trick-play worker.
+    # ------------------------------------------------------------------------
 
-    # start_bif_worker()
+    start_trickplay_worker()
 
     # ------------------------------------------------------------------------
     # Catalog scanner
-    #
-    # Catalog indexing remains independent of thumbnail and BIF generation.
     # ------------------------------------------------------------------------
 
     timer_thread = threading.Thread(
@@ -635,33 +826,24 @@ async def lifespan(app: FastAPI):
 
     # ------------------------------------------------------------------------
     # Initial missing-thumbnail discovery
-    #
-    # The catalog cache has already been loaded above. The catalog scanner
-    # is also running independently.
-    #
-    # This initial pass handles videos already present in the disk cache.
-    # Newly indexed videos are picked up by the background monitor below.
     # ------------------------------------------------------------------------
 
     queue_missing_thumbnails()
 
+    # ------------------------------------------------------------------------
+    # Initial missing trick-play discovery
+    # ------------------------------------------------------------------------
+
+    queue_missing_trickplay()
+
     # =========================================================================
-    # INITIAL BIF DISCOVERY TEMPORARILY DISABLED
-    #
-    # Do not queue missing BIF files during server startup.
-    #
-    # This prevents the server from invoking Roku's biftool while the
-    # FFmpeg dependency problem is unresolved.
+    # BIF DISCOVERY REMAINS DISABLED
     # =========================================================================
 
     # queue_missing_bifs()
 
     # ------------------------------------------------------------------------
     # Background thumbnail monitor
-    #
-    # The catalog scanner can discover additional videos after startup.
-    # This monitor periodically looks for newly indexed videos that do
-    # not yet have thumbnails.
     # ------------------------------------------------------------------------
 
     def thumbnail_monitor_loop():
@@ -677,7 +859,10 @@ async def lifespan(app: FastAPI):
                 ValueError,
                 TypeError,
             ) as ex:
-                log(f"<!> Thumbnail monitor error: {type(ex).__name__}: {ex}")
+                log(
+                    f"<!> Thumbnail monitor error: "
+                    f"{type(ex).__name__}: {ex}"
+                )
 
             THUMBNAIL_WORKER_STOP.wait(timeout=10)
 
@@ -691,13 +876,45 @@ async def lifespan(app: FastAPI):
 
     thumbnail_monitor_thread.start()
 
+    # ------------------------------------------------------------------------
+    # Background trick-play monitor
+    #
+    # This watches the catalog for videos that are newly indexed after
+    # startup and queues trick-play generation for them.
+    # ------------------------------------------------------------------------
+
+    def trickplay_monitor_loop():
+        log("--> Background trick-play monitor started.")
+
+        while not TRICKPLAY_WORKER_STOP.is_set():
+            try:
+                queue_missing_trickplay()
+
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+            ) as ex:
+                log(
+                    f"<!> Trick-play monitor error: "
+                    f"{type(ex).__name__}: {ex}"
+                )
+
+            TRICKPLAY_WORKER_STOP.wait(timeout=10)
+
+        log("--> Background trick-play monitor stopped.")
+
+    trickplay_monitor_thread = threading.Thread(
+        target=trickplay_monitor_loop,
+        daemon=True,
+        name="TrickPlayMonitor",
+    )
+
+    trickplay_monitor_thread.start()
+
     # =========================================================================
-    # BIF MONITOR TEMPORARILY DISABLED
-    #
-    # Do not periodically scan for missing BIF files.
-    #
-    # This is intentionally disabled so the working server and thumbnail
-    # generation remain completely independent of biftool.
+    # BIF MONITOR REMAINS DISABLED
     # =========================================================================
 
     # def bif_monitor_loop():
@@ -755,8 +972,10 @@ async def lifespan(app: FastAPI):
 
     stop_thumbnail_worker()
 
+    stop_trickplay_worker()
+
     # =========================================================================
-    # BIF WORKER SHUTDOWN TEMPORARILY DISABLED
+    # BIF WORKER SHUTDOWN REMAINS DISABLED
     # =========================================================================
 
     # stop_bif_worker()
@@ -1057,10 +1276,6 @@ def get_video_models(
 # VIDEO MODEL SEARCH
 #
 # This route MUST appear before /api/video-models/{file_id}.
-#
-# FastAPI evaluates path operations in declaration order, so the
-# fixed "search" segment must be registered before the generic
-# single-value path parameter.
 # ============================================================================
 
 
@@ -1130,83 +1345,6 @@ def search_video_models(
 ):
     """
     Search VideoModels using flexible text matching.
-
-    search_field determines whether the search is performed against
-    the filename or the VideoModel title.
-
-    The default is fileName.
-
-    Search is case-insensitive and supports partial terms.
-
-    Multiple search terms are treated as independent terms.
-    All search terms must match, but they may appear in any order.
-
-    Common filename separators and punctuation are ignored.
-
-    Searches without spaces can match words that are separated
-    by spaces or punctuation in the searched value.
-
-    The file extension is ignored for filename searches.
-
-    exclude_words optionally removes results containing any of
-    the supplied exclusion words.
-
-    The optional drives parameter restricts the search to the
-    specified drives. The parameter may be repeated to search
-    multiple drives.
-
-    Examples:
-
-        fileName=deer
-
-            Matches:
-
-                Deer and Bear in the Woods.mp4
-
-        fileName=deer bear
-
-            Matches:
-
-                Deer and Bear in the Woods.mp4
-
-        fileName=bear deer
-
-            Also matches:
-
-                Deer and Bear in the Woods.mp4
-
-        fileName=mom son
-
-            Matches:
-
-                Mom and Son Playing.mp4
-
-        fileName=MomSon
-
-            Also matches:
-
-                Mom and Son Playing.mp4
-
-        exclude_words=bear
-
-            Excludes filenames/titles containing "bear".
-
-        drives=Vids
-
-            Searches only the Vids drive.
-
-        drives=Vids&drives=Movies
-
-            Searches both the Vids and Movies drives.
-
-        No drives parameter
-
-            Searches all drives.
-
-    Optional directory filtering can further restrict
-    the search results.
-
-    The response contains complete VideoModel JSON objects.
     """
 
     return api_video_models.handle_search_video_models(
@@ -1231,9 +1369,6 @@ def get_video_model(
 ):
     """
     Return the complete VideoModel for one video.
-
-    The response contains metadata and URLs for the
-    thumbnail and video stream. The video itself is not returned.
     """
 
     return api_video_models.handle_get_video_model(
@@ -1252,8 +1387,6 @@ def get_video_model_thumbnail(
 ):
     """
     Return the actual JPEG thumbnail for a video.
-
-    The VideoModel contains the URL to this endpoint.
     """
 
     return api_video_models.handle_get_thumbnail(
@@ -1266,13 +1399,11 @@ def get_video_model_thumbnail(
 # TRICK-PLAY / BIF ENDPOINT
 #
 # NOTE:
-# This endpoint remains enabled.
+# The existing BIF endpoint remains untouched for now.
 #
-# It does NOT invoke biftool and does NOT invoke FFmpeg.
-#
-# It simply serves an existing BIF file if one is present.
-#
-# BIF GENERATION itself is temporarily disabled above.
+# The new JPEG trick-play generation runs independently in the background.
+# We will replace this endpoint with the JPEG-serving endpoint after we
+# confirm generation is working correctly.
 # ============================================================================
 
 
@@ -1284,16 +1415,9 @@ def get_trick_play(
     file_id: str,
 ):
     """
-    Return the Roku BIF trick-play file for a video.
+    Return the existing Roku BIF trick-play file for a video.
 
-    The BIF file is stored separately from the video catalog and
-    regular poster-thumbnail cache.
-
-    BIF files are generated independently and are not created by
-    this endpoint.
-
-    The VideoModel exposes the URL to this endpoint through
-    trickPlayUrl.
+    BIF generation remains disabled.
     """
 
     bif_path = os.path.join(
@@ -1343,8 +1467,6 @@ def move_video(
     """Move a video to an existing directory."""
 
     payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
-
-    # Provide both snake_case and camelCase keys for downstream compatibility.
 
     if "file_id" in payload and "fileId" not in payload:
         payload["fileId"] = payload["file_id"]
