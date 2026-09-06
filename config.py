@@ -16,6 +16,7 @@ CACHE_ROOT_DIR = "/Volumes/ExtData/RokuTemp"
 
 THUMB_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "roku_thumbs")
 BIF_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "roku_bif")
+TRICKPLAY_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "roku_trickplay")
 FILE_CACHE_FILE = os.path.join(CACHE_ROOT_DIR, "roku_files_cache.json")
 DEFAULT_POSTER_FILE = os.path.join(THUMB_CACHE_DIR, "default_poster.jpg")
 PLAYBACK_POSITIONS_FILE = os.path.join(
@@ -107,6 +108,7 @@ SERVER_START_TIME = time.time()
 # Ensure directories exist
 os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
 os.makedirs(BIF_CACHE_DIR, exist_ok=True)
+os.makedirs(TRICKPLAY_CACHE_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(PLAYBACK_POSITIONS_FILE), exist_ok=True)
 
 # Logger Setup
