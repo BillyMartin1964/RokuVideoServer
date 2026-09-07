@@ -405,37 +405,7 @@ async def lifespan(app: FastAPI):
 
     queue_missing_thumbnails()
 
-    # ------------------------------------------------------------------------
-    # Background thumbnail monitor
-    # ------------------------------------------------------------------------
-
-    def thumbnail_monitor_loop():
-        log("--> Background thumbnail monitor started.")
-
-        while not THUMBNAIL_WORKER_STOP.is_set():
-            try:
-                queue_missing_thumbnails()
-
-            except (
-                OSError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-            ) as ex:
-                log(f"<!> Thumbnail monitor error: {type(ex).__name__}: {ex}")
-
-            THUMBNAIL_WORKER_STOP.wait(timeout=10)
-
-        log("--> Background thumbnail monitor stopped.")
-
-    thumbnail_monitor_thread = threading.Thread(
-        target=thumbnail_monitor_loop,
-        daemon=True,
-        name="ThumbnailMonitor",
-    )
-
-    thumbnail_monitor_thread.start()
-
+   
     # ------------------------------------------------------------------------
     # Server information
     # ------------------------------------------------------------------------

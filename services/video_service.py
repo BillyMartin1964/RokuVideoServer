@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 
 # Ensure project root (~/Documents/RokuVideoServer/) is in sys.path for absolute imports
@@ -17,14 +18,13 @@ from config import (
     FILE_CACHE_FILE,
     IGNORED_DIRS,
     IGNORED_EXTENSIONS,
-    REFRESH_INTERVAL_SECONDS,
     VIDEO_FORMATS,
     VOLUMES_DIR,
     log,
     log_separator,
 )
 from models.video_model import create_video_model
-from services import ffmpeg_service
+from services import ffmpeg_service, trickplay_service
 
 
 def get_file_id(full_path: str) -> str:
@@ -165,6 +165,59 @@ def save_disk_cache():
 
     except (OSError, TypeError, ValueError) as ex:
         log(f"<!> Error writing SSD disk cache: {type(ex).__name__}: {ex}")
+
+
+def queue_thumbnail_for_indexed_video(
+    file_id: str,
+    video_path: str,
+) -> None:
+    """
+    Queue trick-play thumbnail generation for one newly indexed video.
+
+    Thumbnail generation runs in its own daemon thread so the filesystem
+    watcher is not blocked by FFmpeg processing.
+
+    Existing valid trick-play caches are reused by ffmpeg_service.
+    """
+
+    if not file_id:
+        log("--> Thumbnail generation skipped: file ID is empty.")
+        return
+
+    if not video_path or not os.path.isfile(video_path):
+        log(
+            f"--> Thumbnail generation skipped: video file does not exist: {video_path}"
+        )
+        return
+
+    def generate() -> None:
+        try:
+            trickplay_service.generate_trickplay(
+                file_id,
+                video_path,
+            )
+
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            subprocess.SubprocessError,
+        ) as ex:
+            log(
+                f"<!> Background trick-play generation failed for "
+                f"'{os.path.basename(video_path)}': "
+                f"{type(ex).__name__}: {ex}"
+            )
+
+    thumbnail_thread = threading.Thread(
+        target=generate,
+        daemon=True,
+        name=f"TrickPlay-{file_id[:8]}",
+    )
+
+    thumbnail_thread.start()
+
+    log(f"--> Queued trick-play generation for '{os.path.basename(video_path)}'")
 
 
 def try_spotlight_index_scan():
@@ -497,7 +550,6 @@ def cleanup_media_cache():
 
     cache_directories = [
         (config.THUMB_CACHE_DIR, ".jpg"),
-        (config.BIF_CACHE_DIR, ".bif"),
     ]
 
     for cache_directory, expected_extension in cache_directories:
@@ -602,17 +654,16 @@ def run_catalog_scan():
 
 
 def background_timer_loop():
+    """
+    Perform one complete catalog scan at server startup.
+
+    After startup, filesystem changes are handled by watcher_service
+    instead of repeatedly rescanning every video in the catalog.
+    """
+
     run_catalog_scan()
 
-    while True:
-        time.sleep(REFRESH_INTERVAL_SECONDS)
-
-        try:
-            run_catalog_scan()
-
-        except (
-            OSError,
-            RuntimeError,
-            ValueError,
-        ) as ex:
-            log(f"<!> Background catalog scan error: {type(ex).__name__}: {ex}")
+    log(
+        "--> Initial catalog scan complete. "
+        "Ongoing catalog updates are handled by the file watcher."
+    )
