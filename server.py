@@ -31,6 +31,7 @@ from services import (
     video_service,
     watcher_service,
 )
+from tools import maintenance_routines
 
 # ============================================================================
 # Client Tracker Memory Store
@@ -43,6 +44,11 @@ START_TIME = time.time()
 
 # ============================================================================
 # Background Thumbnail Generation
+#
+# A single background worker processes queued thumbnail generation jobs.
+# We keep a lightweight queue and a set to avoid duplicate jobs. The
+# monitor loop that scanned the entire catalog every 10s was removed to
+# avoid the heavy periodic filesystem load.
 # ============================================================================
 
 THUMBNAIL_QUEUE: queue.Queue[str] = queue.Queue()
@@ -379,7 +385,12 @@ async def lifespan(app: FastAPI):
     # Start normal thumbnail worker.
     # ------------------------------------------------------------------------
 
-    start_thumbnail_worker()
+    try:
+        start_thumbnail_worker()
+    except (RuntimeError, OSError) as ex:
+        log(
+            f"<!> start_thumbnail_worker raised an exception during startup: {type(ex).__name__}: {ex}"
+        )
 
     # ------------------------------------------------------------------------
     # Catalog scanner
@@ -403,9 +414,13 @@ async def lifespan(app: FastAPI):
     # Initial missing-thumbnail discovery
     # ------------------------------------------------------------------------
 
-    queue_missing_thumbnails()
+    try:
+        queue_missing_thumbnails()
+    except (OSError, ValueError, TypeError) as ex:
+        log(
+            f"<!> queue_missing_thumbnails raised an exception during startup: {type(ex).__name__}: {ex}"
+        )
 
-   
     # ------------------------------------------------------------------------
     # Server information
     # ------------------------------------------------------------------------
@@ -431,7 +446,12 @@ async def lifespan(app: FastAPI):
         watcher_observer.stop()
         watcher_observer.join()
 
-    stop_thumbnail_worker()
+    try:
+        stop_thumbnail_worker()
+    except (RuntimeError, OSError) as ex:
+        log(
+            f"<!> stop_thumbnail_worker raised an exception during shutdown: {type(ex).__name__}: {ex}"
+        )
 
 
 # ============================================================================
@@ -448,6 +468,36 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    openapi_tags=[
+        {
+            "name": "Health",
+            "description": "Server health and connected-client information.",
+        },
+        {
+            "name": "Maintenance",
+            "description": "Validate, repair, and clean media cache assets.",
+        },
+        {
+            "name": "Hard Drives",
+            "description": "Authorized drive management and drive information.",
+        },
+        {
+            "name": "Directories",
+            "description": "Directory and folder browsing.",
+        },
+        {
+            "name": "Video Models",
+            "description": "Video model browsing, search, thumbnails, and management.",
+        },
+        {
+            "name": "Trick-Play",
+            "description": "Trick-play JPEG generation and retrieval.",
+        },
+        {
+            "name": "Video Streaming",
+            "description": "Video playback and HTTP range streaming.",
+        },
+    ],
     lifespan=lifespan,
 )
 
@@ -942,6 +992,7 @@ def generate_trickplay(
             try:
                 if os.path.getsize(frame_path) <= 0:
                     continue
+
             except OSError:
                 continue
 
@@ -966,7 +1017,7 @@ def generate_trickplay(
         "message": ("Trick-play JPEG generation completed successfully."),
         "fileId": file_id,
         "fileName": os.path.basename(file_path),
-        "intervalSeconds": config.TRICKPLAY_INTERVAL_SECONDS,
+        "intervalSeconds": (config.TRICKPLAY_INTERVAL_SECONDS),
         "width": config.TRICKPLAY_WIDTH,
         "height": config.TRICKPLAY_HEIGHT,
         "count": len(generated_files),
@@ -1043,20 +1094,26 @@ def get_trickplay_frame(
 
     try:
         frame_size = os.path.getsize(frame_path)
+
     except OSError:
         frame_size = None
 
     try:
         frame_mtime = os.path.getmtime(frame_path)
+
     except OSError:
         frame_mtime = None
 
     # Check conditional request headers and respond with 304 when applicable.
     # This allows clients to revalidate cached frames instead of always
     # downloading the image.
+
     if frame_size is not None and frame_mtime is not None:
         candidate_etag = f'"{int(frame_size)}-{int(frame_mtime)}"'
-        candidate_last_modified = email.utils.formatdate(frame_mtime, usegmt=True)
+        candidate_last_modified = email.utils.formatdate(
+            frame_mtime,
+            usegmt=True,
+        )
 
         if_none_match = request.headers.get("if-none-match")
         if_modified_since = request.headers.get("if-modified-since")
@@ -1084,14 +1141,18 @@ def get_trickplay_frame(
             )
 
     # Construct a simple ETag from size+mtime when available to allow
-    # clients to revalidate cached frames. Use short max-age so Roku clients
-    # revalidate frequently while trick-play frames may be updated.
+    # clients to revalidate cached frames. Use short max-age so trick-play
+    # frames may be updated.
+
     etag = None
     last_modified = None
 
     if frame_size is not None and frame_mtime is not None:
         etag = f'"{int(frame_size)}-{int(frame_mtime)}"'
-        last_modified = email.utils.formatdate(frame_mtime, usegmt=True)
+        last_modified = email.utils.formatdate(
+            frame_mtime,
+            usegmt=True,
+        )
 
     headers = {
         "Cache-Control": ("public, max-age=1, must-revalidate"),
@@ -1111,6 +1172,185 @@ def get_trickplay_frame(
         filename=os.path.basename(frame_path),
         headers=headers,
     )
+
+
+# ============================================================================
+# MAINTENANCE ENDPOINTS
+# ============================================================================
+
+
+def _maintenance_result_to_dict(result):
+    """Convert a maintenance result/report to a JSON-serializable dictionary."""
+
+    if hasattr(result, "to_dict"):
+        return result.to_dict()
+
+    if hasattr(result, "__dict__"):
+        return result.__dict__
+
+    return result
+
+
+@app.get(
+    "/api/maintenance/thumbnails/validate",
+    tags=["Maintenance"],
+)
+def validate_all_thumbnails():
+    """Validate all cached video thumbnails without changing files."""
+
+    result = maintenance_routines.validate_all_thumbnails()
+
+    return _maintenance_result_to_dict(result)
+
+
+@app.post(
+    "/api/maintenance/thumbnails/repair",
+    tags=["Maintenance"],
+)
+def repair_all_thumbnails():
+    """Validate and repair all invalid or missing video thumbnails."""
+
+    result = maintenance_routines.repair_all_thumbnails()
+
+    return _maintenance_result_to_dict(result)
+
+
+@app.get(
+    "/api/maintenance/trickplay/validate",
+    tags=["Maintenance"],
+)
+def validate_all_trickplay():
+    """Validate trick-play assets for all indexed videos."""
+
+    result = maintenance_routines.validate_all_trickplay()
+
+    return _maintenance_result_to_dict(result)
+
+
+@app.post(
+    "/api/maintenance/trickplay/repair",
+    tags=["Maintenance"],
+)
+def repair_all_trickplay():
+    """Validate and repair trick-play assets for all indexed videos."""
+
+    result = maintenance_routines.repair_all_trickplay()
+
+    return _maintenance_result_to_dict(result)
+
+
+@app.get(
+    "/api/maintenance/orphans",
+    tags=["Maintenance"],
+)
+def inspect_orphaned_assets():
+    """Find orphaned thumbnail and trick-play cache assets without deleting them."""
+
+    result = maintenance_routines.cleanup_all_orphans(
+        dry_run=True,
+    )
+
+    return _maintenance_result_to_dict(result)
+
+
+@app.post(
+    "/api/maintenance/orphans/cleanup",
+    tags=["Maintenance"],
+)
+def cleanup_orphaned_assets():
+    """Delete orphaned thumbnail and trick-play cache assets."""
+
+    result = maintenance_routines.cleanup_all_orphans(
+        dry_run=False,
+    )
+
+    return _maintenance_result_to_dict(result)
+
+
+@app.get(
+    "/api/maintenance/video/{file_id}",
+    tags=["Maintenance"],
+)
+def validate_video_assets(
+    file_id: str,
+    validate_trickplay_assets: bool = Query(
+        True,
+        description="Also validate the video's trick-play assets.",
+    ),
+):
+    """Validate the thumbnail and optionally trick-play assets for one video."""
+
+    result = maintenance_routines.validate_video_assets(
+        file_id,
+        validate_trickplay_assets=validate_trickplay_assets,
+    )
+
+    return _maintenance_result_to_dict(result)
+
+
+@app.post(
+    "/api/maintenance/video/{file_id}/repair",
+    tags=["Maintenance"],
+)
+def repair_video_assets(
+    file_id: str,
+    repair_thumbnail_asset: bool = Query(
+        True,
+        description="Repair the video's thumbnail when invalid or missing.",
+    ),
+    repair_trickplay_assets: bool = Query(
+        False,
+        description="Repair the video's trick-play assets when invalid or missing.",
+    ),
+):
+    """Repair selected cached assets for one video."""
+
+    result = maintenance_routines.repair_video_assets(
+        file_id,
+        repair_thumbnail_asset=repair_thumbnail_asset,
+        repair_trickplay_assets=repair_trickplay_assets,
+    )
+
+    return _maintenance_result_to_dict(result)
+
+
+@app.post(
+    "/api/maintenance/run",
+    tags=["Maintenance"],
+)
+def run_maintenance(
+    validate_trickplay_assets: bool = Query(
+        False,
+        description="Validate trick-play assets during the catalog scan.",
+    ),
+    repair_thumbnails: bool = Query(
+        False,
+        description="Repair invalid or missing thumbnails during the scan.",
+    ),
+    repair_trickplay_assets: bool = Query(
+        False,
+        description="Repair invalid or missing trick-play assets during the scan.",
+    ),
+    cleanup_orphans: bool = Query(
+        False,
+        description="Remove orphaned thumbnail and trick-play cache assets.",
+    ),
+    include_video_results: bool = Query(
+        False,
+        description="Include detailed per-video maintenance results.",
+    ),
+):
+    """Run the complete cache maintenance process with the selected options."""
+
+    result = maintenance_routines.run_cache_maintenance(
+        validate_trickplay_assets=validate_trickplay_assets,
+        repair_thumbnails=repair_thumbnails,
+        repair_trickplay_assets=repair_trickplay_assets,
+        cleanup_orphans=cleanup_orphans,
+        include_video_results=include_video_results,
+    )
+
+    return _maintenance_result_to_dict(result)
 
 
 # ============================================================================

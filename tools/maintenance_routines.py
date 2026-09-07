@@ -54,16 +54,10 @@ from services import trickplay_service, video_model_service
 # ============================================================================
 
 
-# JPEG files smaller than this are almost certainly invalid.
 MIN_JPEG_FILE_SIZE = 128
 
-
-# Small tolerance prevents false positives caused by filesystem timestamp
-# resolution differences.
 STALE_TIMESTAMP_TOLERANCE_SECONDS = 2
 
-
-# Expected trick-play frame extension.
 TRICKPLAY_EXTENSION = ".jpg"
 
 
@@ -149,9 +143,6 @@ class VideoMaintenanceResult:
 
 # ============================================================================
 # SERIALIZATION HELPERS
-#
-# These are intentionally defined BEFORE MaintenanceReport so Pylance can
-# resolve them when MaintenanceReport.to_dict() is analyzed.
 # ============================================================================
 
 
@@ -417,7 +408,6 @@ def get_jpeg_dimensions(
         (width, height)
 
     Returns None when:
-
         - The file cannot be opened.
         - The file is not a recognizable JPEG.
         - Dimensions cannot be determined.
@@ -428,7 +418,6 @@ def get_jpeg_dimensions(
             file_path,
             "rb",
         ) as file_handle:
-            # JPEG Start Of Image marker.
             marker = file_handle.read(2)
 
             if marker != b"\xff\xd8":
@@ -454,16 +443,12 @@ def get_jpeg_dimensions(
 
                 marker_code = byte[0]
 
-                # Standalone JPEG markers.
                 if marker_code in (
                     0xD8,
                     0xD9,
                 ):
                     continue
 
-                # Start Of Scan.
-                #
-                # Dimensions should have appeared before this.
                 if marker_code == 0xDA:
                     return None
 
@@ -480,7 +465,6 @@ def get_jpeg_dimensions(
                 if segment_length < 2:
                     return None
 
-                # JPEG Start Of Frame markers.
                 if marker_code in (
                     0xC0,
                     0xC1,
@@ -541,7 +525,6 @@ def validate_jpeg_file(
     Validate a JPEG cache file.
 
     Checks:
-
         - File exists.
         - File size.
         - JPEG structure.
@@ -591,10 +574,6 @@ def validate_jpeg_file(
     result.width = width
 
     result.height = height
-
-    # ------------------------------------------------------------------------
-    # Optional stale check.
-    # ------------------------------------------------------------------------
 
     if check_stale and source_file_path and os.path.isfile(source_file_path):
         source_mtime = safe_file_mtime(source_file_path)
@@ -840,8 +819,6 @@ def repair_thumbnail(
 
         return validation.valid
 
-    # Some implementations may successfully generate the thumbnail
-    # but return None. Validate the deterministic cache path.
     validation = validate_thumbnail(file_path)
 
     return validation.valid
@@ -1052,10 +1029,6 @@ def validate_trickplay(
 
             result.invalid_frames.append(frame_path)
 
-    # ------------------------------------------------------------------------
-    # Verify frame numbering.
-    # ------------------------------------------------------------------------
-
     result.missing_frame_numbers = find_missing_frame_numbers(frame_numbers)
 
     if (
@@ -1234,10 +1207,6 @@ def repair_video_assets(
     if not file_path:
         return result
 
-    # ------------------------------------------------------------------------
-    # Thumbnail repair.
-    # ------------------------------------------------------------------------
-
     if (
         repair_thumbnail_asset
         and result.thumbnail is not None
@@ -1248,10 +1217,6 @@ def repair_video_assets(
         result.thumbnail_repaired = repaired
 
         result.thumbnail = validate_thumbnail(file_path)
-
-    # ------------------------------------------------------------------------
-    # Trick-play repair.
-    # ------------------------------------------------------------------------
 
     if (
         repair_trickplay_assets
@@ -1367,10 +1332,6 @@ def scan_catalog(
 
         report.videos_scanned += 1
 
-        # --------------------------------------------------------------------
-        # Missing source video.
-        # --------------------------------------------------------------------
-
         if not file_path or not os.path.isfile(file_path):
             report.videos_missing += 1
 
@@ -1387,10 +1348,6 @@ def scan_catalog(
                 report.video_results.append(video_result)
 
             continue
-
-        # --------------------------------------------------------------------
-        # Validate assets.
-        # --------------------------------------------------------------------
 
         video_result = validate_video_assets(
             file_id=file_id,
@@ -1415,10 +1372,6 @@ def scan_catalog(
                 trickplay,
             )
 
-        # --------------------------------------------------------------------
-        # Thumbnail repair.
-        # --------------------------------------------------------------------
-
         if (
             repair_thumbnails
             and thumbnail is not None
@@ -1429,10 +1382,6 @@ def scan_catalog(
             video_result.thumbnail_repaired = True
             video_result.thumbnail = validate_thumbnail(file_path)
 
-        # --------------------------------------------------------------------
-        # Trick-play repair.
-        # --------------------------------------------------------------------
-
         if (
             repair_trickplay_assets
             and trickplay is not None
@@ -1442,10 +1391,6 @@ def scan_catalog(
             report.trickplay_repaired += 1
             video_result.trickplay_repaired = True
             video_result.trickplay = validate_trickplay(file_id)
-
-        # --------------------------------------------------------------------
-        # Error count.
-        # --------------------------------------------------------------------
 
         has_error = (
             video_result.errors
@@ -1511,10 +1456,6 @@ def get_thumbnail_cache_directory() -> str | None:
             + 1
         )
 
-    # Explicit lambda avoids the Pylance overload problem with:
-    #
-    #     key=counts.get
-    #
     return max(
         counts,
         key=lambda key: counts[key],
@@ -1646,15 +1587,6 @@ def get_trickplay_root_directory() -> str | None:
             + 1
         )
 
-    # IMPORTANT:
-    #
-    # This return MUST remain inside get_trickplay_root_directory().
-    #
-    # The previous error occurred because it was accidentally placed at
-    # module level, causing:
-    #
-    #     "return can be used only within a function"
-    #
     return max(
         counts,
         key=lambda key: counts[key],
@@ -1752,10 +1684,6 @@ def run_cache_maintenance(
         include_video_results=(include_video_results),
     )
 
-    # ------------------------------------------------------------------------
-    # Orphan detection.
-    # ------------------------------------------------------------------------
-
     orphaned_thumbnails = find_orphaned_thumbnails()
 
     orphaned_trickplay = find_orphaned_trickplay_directories()
@@ -1763,10 +1691,6 @@ def run_cache_maintenance(
     report.orphaned_thumbnail_files = len(orphaned_thumbnails)
 
     report.orphaned_trickplay_directories = len(orphaned_trickplay)
-
-    # ------------------------------------------------------------------------
-    # Optional orphan cleanup.
-    # ------------------------------------------------------------------------
 
     if cleanup_orphans:
         removed_thumbnails = cleanup_orphaned_thumbnails(dry_run=False)
