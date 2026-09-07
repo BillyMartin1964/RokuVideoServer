@@ -1,32 +1,51 @@
 import logging
 import os
-import shutil
 import sys
 import threading
 import time
 from logging.handlers import TimedRotatingFileHandler
 from typing import Any
 
+# ============================================================
 # Network & Server Settings
+# ============================================================
+
 PORT = 8001
 VOLUMES_DIR = "/Volumes"
 
+
+# ============================================================
 # Cache Directories & Files
+# ============================================================
 
 CACHE_ROOT_DIR = "/Volumes/ExtData/RokuTemp"
 
 THUMB_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "roku_thumbs")
 TRICKPLAY_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "roku_trickplay")
+
 FILE_CACHE_FILE = os.path.join(CACHE_ROOT_DIR, "roku_files_cache.json")
-DEFAULT_POSTER_FILE = os.path.join(THUMB_CACHE_DIR, "default_poster.jpg")
-PLAYBACK_POSITIONS_FILE = os.path.join(
-    os.path.dirname(__file__), "data", "playback.json"
-)
-LOG_FILE_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "server_activity.log"
+
+DEFAULT_POSTER_FILE = os.path.join(
+    THUMB_CACHE_DIR,
+    "default_poster.jpg",
 )
 
+PLAYBACK_POSITIONS_FILE = os.path.join(
+    os.path.dirname(__file__),
+    "data",
+    "playback.json",
+)
+
+LOG_FILE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "server_activity.log",
+)
+
+
+# ============================================================
 # FFmpeg / FFprobe Paths
+# ============================================================
+
 FFMPEG_PATHS = [
     "/opt/homebrew/bin/ffmpeg",
     "/usr/local/bin/ffmpeg",
@@ -39,11 +58,19 @@ FFPROBE_PATHS = [
     "/usr/bin/ffprobe",
 ]
 
+
+# ============================================================
 # Stream & Scan Settings
+# ============================================================
+
 CHUNK_SIZE = 512 * 1024
 REFRESH_INTERVAL_SECONDS = 600
 
+
+# ============================================================
 # Thumbnail Settings
+# ============================================================
+
 THUMB_WIDTH = 592
 THUMB_HEIGHT = 333
 
@@ -52,14 +79,20 @@ THUMBNAIL_SEEK_SECONDS = 60
 FFPROBE_TIMEOUT_SECONDS = 5
 
 
+# ============================================================
 # Trickplay Thumbnail Settings
+# ============================================================
+
 TRICKPLAY_INTERVAL_SECONDS = 10
 TRICKPLAY_WIDTH = 320
 TRICKPLAY_HEIGHT = 180
 TRICKPLAY_TIMEOUT_SECONDS = 3600
 
 
+# ============================================================
 # Video Processing Filters
+# ============================================================
+
 ALLOWED_EXTENSIONS = {
     ".mp4",
     ".mkv",
@@ -92,18 +125,47 @@ IGNORED_EXTENSIONS = {
 }
 
 VIDEO_FORMATS = {
-    ".mp4": {"streamFormat": "mp4", "contentType": "video/mp4"},
-    ".m4v": {"streamFormat": "mp4", "contentType": "video/mp4"},
-    ".mov": {"streamFormat": "mp4", "contentType": "video/quicktime"},
-    ".mkv": {"streamFormat": "mkv", "contentType": "video/x-matroska"},
-    ".webm": {"streamFormat": "mkv", "contentType": "video/webm"},
-    ".avi": {"streamFormat": "mp4", "contentType": "video/x-msvideo"},
-    ".ts": {"streamFormat": "mp4", "contentType": "video/mp2t"},
-    ".flv": {"streamFormat": "mp4", "contentType": "video/x-flv"},
+    ".mp4": {
+        "streamFormat": "mp4",
+        "contentType": "video/mp4",
+    },
+    ".m4v": {
+        "streamFormat": "mp4",
+        "contentType": "video/mp4",
+    },
+    ".mov": {
+        "streamFormat": "mp4",
+        "contentType": "video/quicktime",
+    },
+    ".mkv": {
+        "streamFormat": "mkv",
+        "contentType": "video/x-matroska",
+    },
+    ".webm": {
+        "streamFormat": "mkv",
+        "contentType": "video/webm",
+    },
+    ".avi": {
+        "streamFormat": "mp4",
+        "contentType": "video/x-msvideo",
+    },
+    ".ts": {
+        "streamFormat": "mp4",
+        "contentType": "video/mp2t",
+    },
+    ".flv": {
+        "streamFormat": "mp4",
+        "contentType": "video/x-flv",
+    },
 }
 
+
+# ============================================================
 # Global Shared State
+# ============================================================
+
 CACHE_LOCK = threading.Lock()
+
 FILE_MAP: dict[str, dict[str, Any]] = {}
 FILES_LIST: list[dict[str, Any]] = []
 
@@ -111,19 +173,28 @@ FILES_LIST: list[dict[str, Any]] = []
 DIRECTORIES_MAP: dict[str, dict[str, Any]] = {}
 
 SCAN_IN_PROGRESS = False
+
 SERVER_START_TIME = time.time()
 
-# Ensure directories exist
+
+# ============================================================
+# Ensure Configured Directories Exist
+# ============================================================
+
 os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
 os.makedirs(TRICKPLAY_CACHE_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(PLAYBACK_POSITIONS_FILE), exist_ok=True)
 
+
+# ============================================================
 # Logger Setup
+# ============================================================
+
 _logger = logging.getLogger("RokuServerNew")
 _logger.setLevel(logging.INFO)
 
 if not _logger.handlers:
-    # Rotates daily at midnight and keeps a rolling 7-day log history
+    # Rotates daily at midnight and keeps a rolling 7-day log history.
     _file_handler = TimedRotatingFileHandler(
         LOG_FILE_PATH,
         when="midnight",
@@ -131,94 +202,35 @@ if not _logger.handlers:
         backupCount=7,
         encoding="utf-8",
     )
+
     _file_handler.suffix = "%Y-%m-%d"
+
     _file_handler.setFormatter(logging.Formatter("%(message)s"))
 
     _console_handler = logging.StreamHandler(sys.stdout)
+
     _console_handler.setFormatter(logging.Formatter("%(message)s"))
 
     _logger.addHandler(_file_handler)
     _logger.addHandler(_console_handler)
 
 
+# ============================================================
+# Logging Helpers
+# ============================================================
+
+
 def log(message: str) -> None:
     timestamp = time.strftime("%H:%M:%S")
     formatted_msg = f"[{timestamp}] {message}"
+
     _logger.info(formatted_msg)
+
     sys.stdout.flush()
 
 
 def log_separator() -> None:
     _logger.info("")
     _logger.info("=" * 72)
+
     sys.stdout.flush()
-
-
-# ---------------------------------------------------------------------------
-# Runtime migration: move misplaced trick-play cache directories
-# If some code mistakenly created a `trickplay` directory under the
-# thumbnail cache (e.g. <CACHE>/roku_thumbs/trickplay/...), move its
-# contents into `TRICKPLAY_CACHE_DIR` so all trick-play assets live in the
-# configured trick-play cache root.
-# ---------------------------------------------------------------------------
-try:
-    misplaced_trickplay_dir = os.path.join(THUMB_CACHE_DIR, "trickplay")
-
-    if os.path.isdir(misplaced_trickplay_dir):
-        # Ensure target exists
-        os.makedirs(TRICKPLAY_CACHE_DIR, exist_ok=True)
-
-        for child in os.listdir(misplaced_trickplay_dir):
-            src = os.path.join(misplaced_trickplay_dir, child)
-            dst = os.path.join(TRICKPLAY_CACHE_DIR, child)
-
-            try:
-                if os.path.exists(dst):
-                    # If destination exists and is a dir, merge contents.
-                    if os.path.isdir(dst) and os.path.isdir(src):
-                        for entry in os.listdir(src):
-                            shutil.move(os.path.join(src, entry), dst)
-                        shutil.rmtree(src, ignore_errors=True)
-                    else:
-                        # Otherwise, move with a suffix to avoid clobbering.
-                        shutil.move(src, dst + ".migrated")
-                else:
-                    shutil.move(src, dst)
-
-            except OSError as ex:
-                # Best-effort migration; log failures for visibility.
-                try:
-                    _logger.info(
-                        f"<!> Trick-play migration: failed moving {src} -> {dst}: {type(ex).__name__}: {ex}"
-                    )
-                except (OSError, RuntimeError, ValueError):
-                    # If logger is not usable, ignore the logging failure.
-                    pass
-
-        try:
-            # Remove the now-empty misplaced directory if possible.
-            os.rmdir(misplaced_trickplay_dir)
-        except OSError as ex:
-            try:
-                _logger.info(
-                    f"<!> Trick-play migration: could not remove {misplaced_trickplay_dir}: {type(ex).__name__}: {ex}"
-                )
-            except (OSError, RuntimeError, ValueError):
-                pass
-
-        _logger.info(
-            f"--> Migrated misplaced trick-play cache from {misplaced_trickplay_dir} to {TRICKPLAY_CACHE_DIR}"
-        )
-
-except (OSError, shutil.Error) as ex:
-    # Best-effort migration: log filesystem/shutil errors but do not
-    # raise during import so startup remains robust.
-    try:
-        _logger.info(f"<!> Trick-play migration failed: {type(ex).__name__}: {ex}")
-    except (OSError, RuntimeError, ValueError):
-        # If logging fails for known reasons, fall back to printing.
-        try:
-            print(f"<!> Trick-play migration failed: {type(ex).__name__}: {ex}")
-        except OSError:
-            # If printing also fails, give up silently.
-            pass

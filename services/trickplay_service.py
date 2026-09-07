@@ -1,3 +1,4 @@
+import math
 import os
 import shutil
 import subprocess
@@ -68,6 +69,21 @@ def initialize_trickplay():
     FFMPEG_PATH = None
 
     return False
+
+
+def get_expected_trickplay_frame_count(duration_seconds):
+    """Return the expected number of trick-play frames for a video."""
+
+    try:
+        duration = float(duration_seconds)
+        interval = float(config.TRICKPLAY_INTERVAL_SECONDS)
+    except (TypeError, ValueError, AttributeError):
+        return 0
+
+    if duration <= 0 or interval <= 0:
+        return 0
+
+    return math.ceil(duration / interval)
 
 
 def get_trickplay_cache_dir(file_id):

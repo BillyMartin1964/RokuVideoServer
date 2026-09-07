@@ -937,35 +937,57 @@ def get_trickplay_frame_files(
 
 def find_missing_frame_numbers(
     frame_numbers: Iterable[int],
+    expected_frame_count: int | None = None,
 ) -> list[int]:
     """
-    Find gaps in a zero-based trick-play frame sequence.
+    Find missing trick-play frame numbers.
 
-    Example:
+    When expected_frame_count is provided, the expected sequence is:
 
-        [0, 1, 2, 4]
+        0 through expected_frame_count - 1
 
-    Returns:
-
-        [3]
+    Otherwise, preserve the original behavior of checking for gaps up to
+    the highest existing frame number.
     """
 
     numbers = sorted(set(frame_numbers))
+
+    if expected_frame_count is not None:
+        if expected_frame_count <= 0:
+            return []
+
+        expected = set(range(expected_frame_count))
+        actual = set(numbers)
+
+        return sorted(expected - actual)
 
     if not numbers:
         return []
 
     highest = numbers[-1]
 
-    expected = set(
-        range(
-            highest + 1,
-        )
-    )
+    expected = set(range(highest + 1))
 
     actual = set(numbers)
 
     return sorted(expected - actual)
+
+
+def find_extra_frame_numbers(
+    frame_numbers: Iterable[int],
+    expected_frame_count: int,
+) -> list[int]:
+    """
+    Find trick-play frame numbers beyond the expected sequence.
+    """
+
+    if expected_frame_count <= 0:
+        return sorted(set(frame_numbers))
+
+    expected = set(range(expected_frame_count))
+    actual = set(frame_numbers)
+
+    return sorted(actual - expected)
 
 
 # ============================================================================
@@ -1000,11 +1022,40 @@ def validate_trickplay(
 
     result.directory_exists = True
 
+    indexed_video = get_indexed_video(file_id)
+
+    if indexed_video is None:
+        result.reason = "Video is not indexed."
+
+        return result
+
+    duration_value = (
+        indexed_video.get("duration")
+        or indexed_video.get("durationSeconds")
+        or indexed_video.get("duration_seconds")
+    )
+
+    if duration_value is None:
+        result.reason = "Video duration is not available."
+
+        return result
+
+    expected_frame_count = trickplay_service.get_expected_trickplay_frame_count(
+        duration_value
+    )
+
+    if expected_frame_count <= 0:
+        result.reason = "Could not determine expected trick-play frame count."
+
+        return result
+
     frame_files = get_trickplay_frame_files(cache_directory)
 
     result.frame_count = len(frame_files)
 
     if not frame_files:
+        result.missing_frame_numbers = list(range(expected_frame_count))
+
         result.reason = "No trick-play frames were found."
 
         return result
@@ -1029,17 +1080,15 @@ def validate_trickplay(
 
             result.invalid_frames.append(frame_path)
 
-    result.missing_frame_numbers = find_missing_frame_numbers(frame_numbers)
+    result.missing_frame_numbers = find_missing_frame_numbers(
+        frame_numbers,
+        expected_frame_count=expected_frame_count,
+    )
 
-    if (
-        frame_numbers
-        and frame_numbers[0] != 0
-        and 0 not in result.missing_frame_numbers
-    ):
-        result.missing_frame_numbers.insert(
-            0,
-            0,
-        )
+    extra_frame_numbers = find_extra_frame_numbers(
+        frame_numbers,
+        expected_frame_count=expected_frame_count,
+    )
 
     if result.invalid_frame_count > 0:
         result.reason = "One or more trick-play frames are invalid."
@@ -1047,7 +1096,17 @@ def validate_trickplay(
         return result
 
     if result.missing_frame_numbers:
-        result.reason = "One or more trick-play frame numbers are missing."
+        result.reason = "One or more expected trick-play frame numbers are missing."
+
+        return result
+
+    if extra_frame_numbers:
+        result.reason = "One or more unexpected trick-play frame numbers were found."
+
+        return result
+
+    if result.frame_count != expected_frame_count:
+        result.reason = "Trick-play frame count does not match expected count."
 
         return result
 
