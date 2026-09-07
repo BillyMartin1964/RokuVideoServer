@@ -2,6 +2,7 @@
 
 """Roku Media Hub FastAPI server."""
 
+import email.utils
 import os
 import queue
 import socket
@@ -1013,6 +1014,7 @@ def generate_trickplay(
     tags=["Trick-Play"],
 )
 def get_trickplay_frame(
+    request: Request,
     file_id: str,
     frame_number: int,
 ):
@@ -1069,15 +1071,75 @@ def get_trickplay_frame(
             detail="Trick-play JPEG Not Found",
         )
 
+    try:
+        frame_size = os.path.getsize(frame_path)
+    except OSError:
+        frame_size = None
+
+    try:
+        frame_mtime = os.path.getmtime(frame_path)
+    except OSError:
+        frame_mtime = None
+
+    # Check conditional request headers and respond with 304 when applicable.
+    # This allows clients to revalidate cached frames instead of always
+    # downloading the image.
+    if frame_size is not None and frame_mtime is not None:
+        candidate_etag = f'"{int(frame_size)}-{int(frame_mtime)}"'
+        candidate_last_modified = email.utils.formatdate(frame_mtime, usegmt=True)
+
+        if_none_match = request.headers.get("if-none-match")
+        if_modified_since = request.headers.get("if-modified-since")
+
+        if if_none_match and if_none_match == candidate_etag:
+            from fastapi import Response
+
+            return Response(
+                status_code=status.HTTP_304_NOT_MODIFIED,
+                headers={
+                    "ETag": candidate_etag,
+                    "Cache-Control": "public, max-age=1, must-revalidate",
+                },
+            )
+
+        if if_modified_since and if_modified_since == candidate_last_modified:
+            from fastapi import Response
+
+            return Response(
+                status_code=status.HTTP_304_NOT_MODIFIED,
+                headers={
+                    "Last-Modified": candidate_last_modified,
+                    "Cache-Control": "public, max-age=1, must-revalidate",
+                },
+            )
+
+    # Construct a simple ETag from size+mtime when available to allow
+    # clients to revalidate cached frames. Use short max-age so Roku clients
+    # revalidate frequently while trick-play frames may be updated.
+    etag = None
+    last_modified = None
+
+    if frame_size is not None and frame_mtime is not None:
+        etag = f'"{int(frame_size)}-{int(frame_mtime)}"'
+        last_modified = email.utils.formatdate(frame_mtime, usegmt=True)
+
+    headers = {
+        "Cache-Control": ("public, max-age=1, must-revalidate"),
+        "X-TrickPlay-Frame": str(frame_number),
+        "X-TrickPlay-Interval": str(trickplay_service.TRICKPLAY_INTERVAL_SECONDS),
+    }
+
+    if etag:
+        headers["ETag"] = etag
+
+    if last_modified:
+        headers["Last-Modified"] = last_modified
+
     return FileResponse(
         path=frame_path,
         media_type="image/jpeg",
         filename=os.path.basename(frame_path),
-        headers={
-            "Cache-Control": ("public, max-age=31536000, immutable"),
-            "X-TrickPlay-Frame": str(frame_number),
-            "X-TrickPlay-Interval": str(trickplay_service.TRICKPLAY_INTERVAL_SECONDS),
-        },
+        headers=headers,
     )
 
 
