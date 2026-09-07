@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import sys
 import threading
 import time
@@ -151,3 +152,73 @@ def log_separator() -> None:
     _logger.info("")
     _logger.info("=" * 72)
     sys.stdout.flush()
+
+
+# ---------------------------------------------------------------------------
+# Runtime migration: move misplaced trick-play cache directories
+# If some code mistakenly created a `trickplay` directory under the
+# thumbnail cache (e.g. <CACHE>/roku_thumbs/trickplay/...), move its
+# contents into `TRICKPLAY_CACHE_DIR` so all trick-play assets live in the
+# configured trick-play cache root.
+# ---------------------------------------------------------------------------
+try:
+    misplaced_trickplay_dir = os.path.join(THUMB_CACHE_DIR, "trickplay")
+
+    if os.path.isdir(misplaced_trickplay_dir):
+        # Ensure target exists
+        os.makedirs(TRICKPLAY_CACHE_DIR, exist_ok=True)
+
+        for child in os.listdir(misplaced_trickplay_dir):
+            src = os.path.join(misplaced_trickplay_dir, child)
+            dst = os.path.join(TRICKPLAY_CACHE_DIR, child)
+
+            try:
+                if os.path.exists(dst):
+                    # If destination exists and is a dir, merge contents.
+                    if os.path.isdir(dst) and os.path.isdir(src):
+                        for entry in os.listdir(src):
+                            shutil.move(os.path.join(src, entry), dst)
+                        shutil.rmtree(src, ignore_errors=True)
+                    else:
+                        # Otherwise, move with a suffix to avoid clobbering.
+                        shutil.move(src, dst + ".migrated")
+                else:
+                    shutil.move(src, dst)
+
+            except OSError as ex:
+                # Best-effort migration; log failures for visibility.
+                try:
+                    _logger.info(
+                        f"<!> Trick-play migration: failed moving {src} -> {dst}: {type(ex).__name__}: {ex}"
+                    )
+                except (OSError, RuntimeError, ValueError):
+                    # If logger is not usable, ignore the logging failure.
+                    pass
+
+        try:
+            # Remove the now-empty misplaced directory if possible.
+            os.rmdir(misplaced_trickplay_dir)
+        except OSError as ex:
+            try:
+                _logger.info(
+                    f"<!> Trick-play migration: could not remove {misplaced_trickplay_dir}: {type(ex).__name__}: {ex}"
+                )
+            except (OSError, RuntimeError, ValueError):
+                pass
+
+        _logger.info(
+            f"--> Migrated misplaced trick-play cache from {misplaced_trickplay_dir} to {TRICKPLAY_CACHE_DIR}"
+        )
+
+except (OSError, shutil.Error) as ex:
+    # Best-effort migration: log filesystem/shutil errors but do not
+    # raise during import so startup remains robust.
+    try:
+        _logger.info(f"<!> Trick-play migration failed: {type(ex).__name__}: {ex}")
+    except (OSError, RuntimeError, ValueError):
+        # If logging fails for known reasons, fall back to printing.
+        try:
+            print(f"<!> Trick-play migration failed: {type(ex).__name__}: {ex}")
+        except OSError:
+            # If printing also fails, give up silently.
+            pass
