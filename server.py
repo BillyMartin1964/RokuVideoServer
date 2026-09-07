@@ -996,9 +996,9 @@ def generate_trickplay(
         "message": ("Trick-play JPEG generation completed successfully."),
         "fileId": file_id,
         "fileName": os.path.basename(file_path),
-        "intervalSeconds": (trickplay_service.TRICKPLAY_INTERVAL_SECONDS),
-        "width": trickplay_service.TRICKPLAY_WIDTH,
-        "height": trickplay_service.TRICKPLAY_HEIGHT,
+        "intervalSeconds": config.TRICKPLAY_INTERVAL_SECONDS,
+        "width": config.TRICKPLAY_WIDTH,
+        "height": config.TRICKPLAY_HEIGHT,
         "count": len(generated_files),
         "files": generated_files,
     }
@@ -1126,7 +1126,7 @@ def get_trickplay_frame(
     headers = {
         "Cache-Control": ("public, max-age=1, must-revalidate"),
         "X-TrickPlay-Frame": str(frame_number),
-        "X-TrickPlay-Interval": str(trickplay_service.TRICKPLAY_INTERVAL_SECONDS),
+        "X-TrickPlay-Interval": str(config.TRICKPLAY_INTERVAL_SECONDS),
     }
 
     if etag:

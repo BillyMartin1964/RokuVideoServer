@@ -6,11 +6,6 @@ import tempfile
 import config
 from config import log
 
-TRICKPLAY_INTERVAL_SECONDS = 10
-TRICKPLAY_WIDTH = 320
-TRICKPLAY_HEIGHT = 180
-TRICKPLAY_TIMEOUT_SECONDS = 3600
-
 FFMPEG_PATH = None
 
 
@@ -122,8 +117,10 @@ def get_trickplay_frame_path(file_id, frame_number):
 def generate_trickplay(file_id, video_path):
     """Generate JPEG trick-play frames for one video.
 
-    Frames are generated every TRICKPLAY_INTERVAL_SECONDS and stored
+    Frames are generated every config.TRICKPLAY_INTERVAL_SECONDS and stored
     under config.TRICKPLAY_CACHE_DIR/<file_id>/.
+
+    Existing valid trick-play JPEGs are reused and are not regenerated.
 
     The first frame is always numbered 000000.jpg.
     """
@@ -160,8 +157,19 @@ def generate_trickplay(file_id, video_path):
                 name
                 for name in os.listdir(final_directory)
                 if name.lower().endswith(".jpg")
-                and os.path.isfile(os.path.join(final_directory, name))
-                and os.path.getsize(os.path.join(final_directory, name)) > 0
+                and os.path.isfile(
+                    os.path.join(
+                        final_directory,
+                        name,
+                    )
+                )
+                and os.path.getsize(
+                    os.path.join(
+                        final_directory,
+                        name,
+                    )
+                )
+                > 0
             ]
 
             if existing_files:
@@ -202,10 +210,10 @@ def generate_trickplay(file_id, video_path):
             )
 
             filter_expression = (
-                f"fps=1/{TRICKPLAY_INTERVAL_SECONDS},"
-                f"scale={TRICKPLAY_WIDTH}:{TRICKPLAY_HEIGHT}:"
+                f"fps=1/{config.TRICKPLAY_INTERVAL_SECONDS},"
+                f"scale={config.TRICKPLAY_WIDTH}:{config.TRICKPLAY_HEIGHT}:"
                 f"force_original_aspect_ratio=decrease,"
-                f"pad={TRICKPLAY_WIDTH}:{TRICKPLAY_HEIGHT}:"
+                f"pad={config.TRICKPLAY_WIDTH}:{config.TRICKPLAY_HEIGHT}:"
                 f"(ow-iw)/2:(oh-ih)/2"
             )
 
@@ -232,7 +240,7 @@ def generate_trickplay(file_id, video_path):
 
             log(
                 f"--> Generating trick-play thumbnails every "
-                f"{TRICKPLAY_INTERVAL_SECONDS} seconds for "
+                f"{config.TRICKPLAY_INTERVAL_SECONDS} seconds for "
                 f"'{os.path.basename(video_path)}'..."
             )
 
@@ -240,7 +248,7 @@ def generate_trickplay(file_id, video_path):
                 command,
                 capture_output=True,
                 text=True,
-                timeout=TRICKPLAY_TIMEOUT_SECONDS,
+                timeout=config.TRICKPLAY_TIMEOUT_SECONDS,
                 check=False,
             )
 
@@ -321,7 +329,7 @@ def generate_trickplay(file_id, video_path):
     except subprocess.TimeoutExpired:
         log(
             f"<!> Trick-play generation timed out after "
-            f"{TRICKPLAY_TIMEOUT_SECONDS}s for "
+            f"{config.TRICKPLAY_TIMEOUT_SECONDS}s for "
             f"{os.path.basename(video_path)}"
         )
 
@@ -343,7 +351,7 @@ def get_trickplay_thumbnail(file_id, timestamp_seconds):
     """Return a trick-play JPEG using a timestamp.
 
     This compatibility helper maps a timestamp directly to the
-    corresponding 10-second frame.
+    corresponding trick-play frame.
     """
 
     if not file_id:
@@ -357,7 +365,7 @@ def get_trickplay_thumbnail(file_id, timestamp_seconds):
     if timestamp < 0:
         return None
 
-    frame_number = timestamp // TRICKPLAY_INTERVAL_SECONDS
+    frame_number = timestamp // config.TRICKPLAY_INTERVAL_SECONDS
 
     try:
         thumbnail_path = get_trickplay_frame_path(
