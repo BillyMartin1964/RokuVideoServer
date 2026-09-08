@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import traceback
 
 import config
 from config import log
@@ -437,18 +438,46 @@ def _create_missing_trickplay_folders_sync():
 
     log("--> Starting missing TrickPlay folder maintenance.")
 
+    errors = []
+
     try:
         with config.CACHE_LOCK:
             catalog_items = list(config.FILES_LIST)
-    except (AttributeError, TypeError):
-        log("<!> Could not read the indexed video catalog.")
+    except (
+        AttributeError,
+        KeyError,
+        TypeError,
+        ValueError,
+        OSError,
+    ) as ex:
+        error_type = type(ex).__name__
+        error_message = str(ex)
+        error_traceback = traceback.format_exc()
+
+        log(
+            f"<!> Could not read the indexed video catalog: "
+            f"{error_type}: {error_message}"
+        )
+        log(f"<!> Traceback: {error_traceback}")
+
         return {
             "success": False,
             "message": "Could not read the indexed video catalog.",
+            "errorType": error_type,
+            "error": error_message,
+            "traceback": error_traceback,
             "totalVideos": 0,
             "existingFolders": 0,
             "generatedVideos": 0,
             "failedVideos": 0,
+            "errors": [
+                {
+                    "stage": "catalog_snapshot",
+                    "errorType": error_type,
+                    "error": error_message,
+                    "traceback": error_traceback,
+                }
+            ],
         }
 
     total_videos = 0
@@ -460,7 +489,11 @@ def _create_missing_trickplay_folders_sync():
         if not isinstance(item, dict):
             continue
 
-        file_id = str(item.get("id") or item.get("fileId") or "").strip()
+        file_id = str(
+            item.get("id")
+            or item.get("fileId")
+            or ""
+        ).strip()
 
         if not file_id:
             continue
@@ -469,64 +502,168 @@ def _create_missing_trickplay_folders_sync():
 
         try:
             cache_directory = get_trickplay_cache_dir(file_id)
-        except (OSError, ValueError, TypeError) as ex:
-            failed_videos += 1
+
+            if os.path.isdir(cache_directory):
+                existing_folders += 1
+                continue
+
+            video_path = str(
+                item.get("path")
+                or item.get("fullPath")
+                or ""
+            ).strip()
+
+            if not video_path:
+                failed_videos += 1
+
+                error_message = "Video path is missing from the catalog item."
+
+                log(
+                    f"<!> TrickPlay generation skipped for video ID "
+                    f"{file_id}: {error_message}"
+                )
+
+                errors.append(
+                    {
+                        "stage": "video_path",
+                        "videoId": file_id,
+                        "errorType": "MissingVideoPath",
+                        "error": error_message,
+                    }
+                )
+
+                continue
+
+            if not os.path.isfile(video_path):
+                failed_videos += 1
+
+                error_message = "Video file does not exist."
+
+                log(
+                    f"<!> TrickPlay generation skipped for video ID "
+                    f"{file_id}: {error_message} "
+                    f"Path: {video_path}"
+                )
+
+                errors.append(
+                    {
+                        "stage": "video_path",
+                        "videoId": file_id,
+                        "videoPath": video_path,
+                        "errorType": "FileNotFound",
+                        "error": error_message,
+                    }
+                )
+
+                continue
+
             log(
-                f"<!> Could not determine TrickPlay directory for "
-                f"video ID {file_id}: {type(ex).__name__}: {ex}"
+                f"--> Missing TrickPlay folder found for "
+                f"'{os.path.basename(video_path)}'. Generating thumbnails..."
             )
-            continue
 
-        if os.path.isdir(cache_directory):
-            existing_folders += 1
-            continue
+            try:
+                generated = generate_trickplay(
+                    file_id,
+                    video_path,
+                )
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+                KeyError,
+                AttributeError,
+                subprocess.SubprocessError,
+                shutil.Error,
+            ) as ex:
+                generated = False
 
-        video_path = str(item.get("path") or item.get("fullPath") or "").strip()
+                error_type = type(ex).__name__
+                error_message = str(ex)
+                error_traceback = traceback.format_exc()
 
-        if not video_path:
-            failed_videos += 1
-            log(
-                f"<!> TrickPlay generation skipped for video ID "
-                f"{file_id}: video path is missing."
-            )
-            continue
+                failed_videos += 1
 
-        if not os.path.isfile(video_path):
-            failed_videos += 1
-            log(
-                f"<!> TrickPlay generation skipped for video ID "
-                f"{file_id}: video file does not exist."
-            )
-            continue
+                log(
+                    f"<!> TrickPlay generation exception for "
+                    f"'{os.path.basename(video_path)}': "
+                    f"{error_type}: {error_message}"
+                )
+                log(f"<!> Traceback: {error_traceback}")
 
-        log(
-            f"--> Missing TrickPlay folder found for "
-            f"'{os.path.basename(video_path)}'. Generating thumbnails..."
-        )
+                errors.append(
+                    {
+                        "stage": "generate_trickplay",
+                        "videoId": file_id,
+                        "videoPath": video_path,
+                        "cacheDirectory": cache_directory,
+                        "errorType": error_type,
+                        "error": error_message,
+                        "traceback": error_traceback,
+                    }
+                )
 
-        try:
-            generated = generate_trickplay(
-                file_id,
-                video_path,
-            )
+                continue
+
+            if generated:
+                generated_videos += 1
+            else:
+                failed_videos += 1
+
+                error_message = (
+                    "generate_trickplay returned False. "
+                    "See server log for the detailed generation failure."
+                )
+
+                log(
+                    f"<!> TrickPlay generation returned False for "
+                    f"'{os.path.basename(video_path)}'."
+                )
+
+                errors.append(
+                    {
+                        "stage": "generate_trickplay",
+                        "videoId": file_id,
+                        "videoPath": video_path,
+                        "cacheDirectory": cache_directory,
+                        "errorType": "GenerationFailed",
+                        "error": error_message,
+                    }
+                )
+
         except (
             OSError,
             RuntimeError,
             ValueError,
             TypeError,
+            KeyError,
+            AttributeError,
             subprocess.SubprocessError,
+            shutil.Error,
         ) as ex:
-            generated = False
-            log(
-                f"<!> TrickPlay generation exception for "
-                f"'{os.path.basename(video_path)}': "
-                f"{type(ex).__name__}: {ex}"
-            )
-
-        if generated:
-            generated_videos += 1
-        else:
             failed_videos += 1
+
+            error_type = type(ex).__name__
+            error_message = str(ex)
+            error_traceback = traceback.format_exc()
+
+            log(
+                f"<!> Unexpected TrickPlay maintenance exception for "
+                f"video ID {file_id}: "
+                f"{error_type}: {error_message}"
+            )
+            log(f"<!> Traceback: {error_traceback}")
+
+            errors.append(
+                {
+                    "stage": "video_processing",
+                    "videoId": file_id,
+                    "errorType": error_type,
+                    "error": error_message,
+                    "traceback": error_traceback,
+                }
+            )
 
     log(
         f"--> Missing TrickPlay folder maintenance complete: "
@@ -543,6 +680,8 @@ def _create_missing_trickplay_folders_sync():
         "existingFolders": existing_folders,
         "generatedVideos": generated_videos,
         "failedVideos": failed_videos,
+        "errorCount": len(errors),
+        "errors": errors,
     }
 
 
@@ -554,4 +693,48 @@ async def create_missing_trickplay_folders():
     event loop remains available for normal requests and video streaming.
     """
 
-    return await asyncio.to_thread(_create_missing_trickplay_folders_sync)
+    try:
+        return await asyncio.to_thread(
+            _create_missing_trickplay_folders_sync
+        )
+
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+        subprocess.SubprocessError,
+        shutil.Error,
+    ) as ex:
+        error_type = type(ex).__name__
+        error_message = str(ex)
+        error_traceback = traceback.format_exc()
+
+        log(
+            f"<!> Missing TrickPlay maintenance failed unexpectedly: "
+            f"{error_type}: {error_message}"
+        )
+        log(f"<!> Traceback: {error_traceback}")
+
+        return {
+            "success": False,
+            "message": "Missing TrickPlay folder maintenance failed unexpectedly.",
+            "errorType": error_type,
+            "error": error_message,
+            "traceback": error_traceback,
+            "totalVideos": 0,
+            "existingFolders": 0,
+            "generatedVideos": 0,
+            "failedVideos": 0,
+            "errorCount": 1,
+            "errors": [
+                {
+                    "stage": "maintenance",
+                    "errorType": error_type,
+                    "error": error_message,
+                    "traceback": error_traceback,
+                }
+            ],
+        }

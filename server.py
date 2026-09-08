@@ -1243,17 +1243,59 @@ def repair_all_trickplay():
     "/api/maintenance/trickplay/create_missing_trickplay_folders",
     tags=["Maintenance"],
 )
-def create_missing_trickplay_folders():
+async def create_missing_trickplay_folders():
     """Create missing TrickPlay folders and generate all TrickPlay JPEGs.
 
     This maintenance operation checks the indexed video catalog by video ID.
     Existing TrickPlay folders are skipped. When a TrickPlay folder does not
     exist, it is created and all TrickPlay JPEGs are generated for that video.
+
+    The maintenance service runs its blocking filesystem and FFmpeg work in a
+    worker thread so the FastAPI event loop remains available for other
+    requests and video streaming.
+
+    If maintenance fails, the detailed error report from the service is
+    returned to the caller as the HTTP 500 response detail.
     """
 
-    result = trickplay_service.create_missing_trickplay_folders()
+    try:
+        result = await trickplay_service.create_missing_trickplay_folders()
 
-    return _maintenance_result_to_dict(result)
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+        subprocess.SubprocessError,
+    ) as ex:
+        log(
+            f"<!> Missing TrickPlay maintenance endpoint failed: "
+            f"{type(ex).__name__}: {ex}"
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "success": False,
+                "message": "Missing TrickPlay folder maintenance failed.",
+                "errorType": type(ex).__name__,
+                "error": str(ex),
+            },
+        ) from ex
+
+    result_dict = _maintenance_result_to_dict(result)
+
+    if isinstance(result_dict, dict) and not result_dict.get("success", False):
+        log("<!> Missing TrickPlay maintenance returned a failure result.")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result_dict,
+        )
+
+    return result_dict
 
 
 @app.get(
