@@ -1,3 +1,4 @@
+import asyncio
 import math
 import os
 import shutil
@@ -429,3 +430,128 @@ def delete_trickplay_cache(file_id):
         )
 
         return False
+
+
+def _create_missing_trickplay_folders_sync():
+    """Generate TrickPlay for indexed videos whose cache folder is missing."""
+
+    log("--> Starting missing TrickPlay folder maintenance.")
+
+    try:
+        with config.CACHE_LOCK:
+            catalog_items = list(config.FILES_LIST)
+    except (AttributeError, TypeError):
+        log("<!> Could not read the indexed video catalog.")
+        return {
+            "success": False,
+            "message": "Could not read the indexed video catalog.",
+            "totalVideos": 0,
+            "existingFolders": 0,
+            "generatedVideos": 0,
+            "failedVideos": 0,
+        }
+
+    total_videos = 0
+    existing_folders = 0
+    generated_videos = 0
+    failed_videos = 0
+
+    for item in catalog_items:
+        if not isinstance(item, dict):
+            continue
+
+        file_id = str(item.get("id") or item.get("fileId") or "").strip()
+
+        if not file_id:
+            continue
+
+        total_videos += 1
+
+        try:
+            cache_directory = get_trickplay_cache_dir(file_id)
+        except (OSError, ValueError, TypeError) as ex:
+            failed_videos += 1
+            log(
+                f"<!> Could not determine TrickPlay directory for "
+                f"video ID {file_id}: {type(ex).__name__}: {ex}"
+            )
+            continue
+
+        if os.path.isdir(cache_directory):
+            existing_folders += 1
+            continue
+
+        video_path = str(item.get("path") or item.get("fullPath") or "").strip()
+
+        if not video_path:
+            failed_videos += 1
+            log(
+                f"<!> TrickPlay generation skipped for video ID "
+                f"{file_id}: video path is missing."
+            )
+            continue
+
+        if not os.path.isfile(video_path):
+            failed_videos += 1
+            log(
+                f"<!> TrickPlay generation skipped for video ID "
+                f"{file_id}: video file does not exist."
+            )
+            continue
+
+        log(
+            f"--> Missing TrickPlay folder found for "
+            f"'{os.path.basename(video_path)}'. Generating thumbnails..."
+        )
+
+        try:
+            generated = generate_trickplay(
+                file_id,
+                video_path,
+            )
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            subprocess.SubprocessError,
+        ) as ex:
+            generated = False
+            log(
+                f"<!> TrickPlay generation exception for "
+                f"'{os.path.basename(video_path)}': "
+                f"{type(ex).__name__}: {ex}"
+            )
+
+        if generated:
+            generated_videos += 1
+        else:
+            failed_videos += 1
+
+    log(
+        f"--> Missing TrickPlay folder maintenance complete: "
+        f"{total_videos} videos, "
+        f"{existing_folders} existing folders, "
+        f"{generated_videos} generated, "
+        f"{failed_videos} failures."
+    )
+
+    return {
+        "success": failed_videos == 0,
+        "message": "Missing TrickPlay folder maintenance completed.",
+        "totalVideos": total_videos,
+        "existingFolders": existing_folders,
+        "generatedVideos": generated_videos,
+        "failedVideos": failed_videos,
+    }
+
+
+async def create_missing_trickplay_folders():
+    """Generate TrickPlay for indexed videos missing their cache folder.
+
+    Existing TrickPlay folders are skipped without inspecting their contents.
+    Blocking filesystem and FFmpeg work runs in a worker thread so the FastAPI
+    event loop remains available for normal requests and video streaming.
+    """
+
+    return await asyncio.to_thread(_create_missing_trickplay_folders_sync)

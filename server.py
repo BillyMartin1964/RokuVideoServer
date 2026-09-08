@@ -1239,6 +1239,23 @@ def repair_all_trickplay():
     return _maintenance_result_to_dict(result)
 
 
+@app.post(
+    "/api/maintenance/trickplay/create_missing_trickplay_folders",
+    tags=["Maintenance"],
+)
+def create_missing_trickplay_folders():
+    """Create missing TrickPlay folders and generate all TrickPlay JPEGs.
+
+    This maintenance operation checks the indexed video catalog by video ID.
+    Existing TrickPlay folders are skipped. When a TrickPlay folder does not
+    exist, it is created and all TrickPlay JPEGs are generated for that video.
+    """
+
+    result = trickplay_service.create_missing_trickplay_folders()
+
+    return _maintenance_result_to_dict(result)
+
+
 @app.get(
     "/api/maintenance/orphans",
     tags=["Maintenance"],
