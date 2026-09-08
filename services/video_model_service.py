@@ -8,6 +8,7 @@ from config import (
     THUMB_CACHE_DIR,
     THUMB_HEIGHT,
     THUMB_WIDTH,
+    THUMBNAIL_FALLBACK_PERCENT_STEP,
     THUMBNAIL_SEEK_SECONDS,
     THUMBNAIL_TIMEOUT_SECONDS,
     log,
@@ -63,10 +64,7 @@ def create_default_poster_with_ffmpeg():
         subprocess.SubprocessError,
         TimeoutError,
     ) as ex:
-        log(
-            f"<!> FFmpeg default poster creation failed: "
-            f"{type(ex).__name__}: {ex}"
-        )
+        log(f"<!> FFmpeg default poster creation failed: {type(ex).__name__}: {ex}")
         return False
 
 
@@ -83,12 +81,8 @@ def create_default_poster_with_sips():
         rgb = bytes([48, 52, 59])
 
         with open(temp_ppm, "wb") as f:
-            f.write(
-                f"P6\n{THUMB_WIDTH} {THUMB_HEIGHT}\n255\n".encode("ascii")
-            )
-            f.write(
-                rgb * (THUMB_WIDTH * THUMB_HEIGHT)
-            )
+            f.write(f"P6\n{THUMB_WIDTH} {THUMB_HEIGHT}\n255\n".encode("ascii"))
+            f.write(rgb * (THUMB_WIDTH * THUMB_HEIGHT))
 
         result = subprocess.run(
             [
@@ -117,10 +111,7 @@ def create_default_poster_with_sips():
         subprocess.SubprocessError,
         TimeoutError,
     ) as ex:
-        log(
-            f"<!> SIPS default poster creation failed: "
-            f"{type(ex).__name__}: {ex}"
-        )
+        log(f"<!> SIPS default poster creation failed: {type(ex).__name__}: {ex}")
         return False
 
     finally:
@@ -132,10 +123,7 @@ def create_default_poster_with_sips():
 
 
 def ensure_default_poster():
-    if (
-        os.path.exists(DEFAULT_POSTER_FILE)
-        and os.path.getsize(DEFAULT_POSTER_FILE) > 0
-    ):
+    if os.path.exists(DEFAULT_POSTER_FILE) and os.path.getsize(DEFAULT_POSTER_FILE) > 0:
         return True
 
     if create_default_poster_with_ffmpeg():
@@ -212,9 +200,7 @@ def run_quicklook_thumbnail(
     # Isolated temp directory per thread/process prevents
     # collision during parallel catalog generation.
     try:
-        temp_dir = tempfile.mkdtemp(
-            dir=THUMB_CACHE_DIR
-        )
+        temp_dir = tempfile.mkdtemp(dir=THUMB_CACHE_DIR)
     except OSError as ex:
         log(
             f"<!> QuickLook temporary directory creation failed for "
@@ -256,10 +242,7 @@ def run_quicklook_thumbnail(
             generated_pngs[0],
         )
 
-        if (
-            os.path.exists(source_thumbnail)
-            and os.path.getsize(source_thumbnail) > 0
-        ):
+        if os.path.exists(source_thumbnail) and os.path.getsize(source_thumbnail) > 0:
             convert_result = subprocess.run(
                 [
                     "/usr/bin/sips",
@@ -305,32 +288,39 @@ def run_quicklook_thumbnail(
 def generate_thumbnail(file_path):
     thumb_path = thumbnail_cache_path(file_path)
 
-    if (
-        os.path.exists(thumb_path)
-        and os.path.getsize(thumb_path) > 0
-    ):
+    if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
         return thumb_path
 
     log_separator()
-    log(
-        f"THUMBNAIL REQUEST: "
-        f"{os.path.basename(file_path)}"
-    )
+    log(f"THUMBNAIL REQUEST: {os.path.basename(file_path)}")
 
     if ffmpeg_service.FFMPEG_PATH:
-        if run_ffmpeg_thumbnail(
-            file_path,
-            thumb_path,
-            THUMBNAIL_SEEK_SECONDS,
-        ):
-            return thumb_path
+        percent = 100
 
-        if run_ffmpeg_thumbnail(
-            file_path,
-            thumb_path,
-            0,
-        ):
-            return thumb_path
+        while percent >= 0:
+            seek_seconds = THUMBNAIL_SEEK_SECONDS * percent / 100
+
+            log(
+                f"--> Trying thumbnail at "
+                f"{percent}% of configured seek time "
+                f"({seek_seconds:.1f} seconds) for "
+                f"'{os.path.basename(file_path)}'..."
+            )
+
+            if run_ffmpeg_thumbnail(
+                file_path,
+                thumb_path,
+                seek_seconds,
+            ):
+                log(
+                    f"--> Thumbnail generated successfully at "
+                    f"{percent}% "
+                    f"({seek_seconds:.1f} seconds) for "
+                    f"'{os.path.basename(file_path)}'"
+                )
+                return thumb_path
+
+            percent -= THUMBNAIL_FALLBACK_PERCENT_STEP
 
     if run_quicklook_thumbnail(
         file_path,
