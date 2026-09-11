@@ -1481,6 +1481,7 @@ def handle_rename_video(
 
     updated_item["id"] = new_id
     updated_item["fileId"] = new_id
+    updated_item["fileName"] = dest_filename
     updated_item["name"] = new_name_without_extension
     updated_item["title"] = new_name_without_extension
     updated_item["path"] = dest_path
