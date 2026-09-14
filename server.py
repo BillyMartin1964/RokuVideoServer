@@ -22,6 +22,7 @@ import api.drives as api_drives
 import api.health as api_health
 import api.video_models as api_video_models
 import api.videos as api_videos
+import api.maintenance as api_maintenance
 import config
 from config import CACHE_LOCK, PORT, log, log_separator
 from services import (
@@ -355,6 +356,16 @@ class RenameVideoRequest(BaseModel):
     )
 
 
+class ReindexRequest(BaseModel):
+    drives: list[str] | None = Field(
+        None,
+        json_schema_extra={"example": ["Vids", "D"]},
+        description=(
+            "Optional list of drive names to reindex. If omitted, all authorized drives are used."
+        ),
+    )
+
+
 # ============================================================================
 # FastAPI Lifespan
 # ============================================================================
@@ -645,6 +656,20 @@ def get_drives(
     return api_drives.handle_get_drives(
         request,
         include_all=include_all,
+    )
+
+
+
+@app.post(
+    "/api/reindex",
+    tags=["Maintenance"],
+)
+def reindex_drives(request: Request, body: ReindexRequest):
+    """Trigger a reindex for specified drives, or all authorized drives when omitted."""
+
+    return api_maintenance.handle_reindex(
+        request,
+        body.model_dump() if hasattr(body, "model_dump") else body.dict(),
     )
 
 
@@ -1197,10 +1222,7 @@ def _maintenance_result_to_dict(result):
 )
 def validate_all_thumbnails():
     """Validate all cached video thumbnails without changing files."""
-
-    result = maintenance_routines.validate_all_thumbnails()
-
-    return _maintenance_result_to_dict(result)
+    return api_maintenance.handle_validate_all_thumbnails(None)
 
 
 @app.post(
@@ -1209,10 +1231,7 @@ def validate_all_thumbnails():
 )
 def repair_all_thumbnails():
     """Validate and repair all invalid or missing video thumbnails."""
-
-    result = maintenance_routines.repair_all_thumbnails()
-
-    return _maintenance_result_to_dict(result)
+    return api_maintenance.handle_repair_all_thumbnails(None)
 
 
 @app.get(
@@ -1221,10 +1240,7 @@ def repair_all_thumbnails():
 )
 def validate_all_trickplay():
     """Validate trick-play assets for all indexed videos."""
-
-    result = maintenance_routines.validate_all_trickplay()
-
-    return _maintenance_result_to_dict(result)
+    return api_maintenance.handle_validate_all_trickplay(None)
 
 
 @app.post(
@@ -1233,10 +1249,7 @@ def validate_all_trickplay():
 )
 def repair_all_trickplay():
     """Validate and repair trick-play assets for all indexed videos."""
-
-    result = maintenance_routines.repair_all_trickplay()
-
-    return _maintenance_result_to_dict(result)
+    return api_maintenance.handle_repair_all_trickplay(None)
 
 
 @app.post(
@@ -1258,44 +1271,7 @@ async def create_missing_trickplay_folders():
     returned to the caller as the HTTP 500 response detail.
     """
 
-    try:
-        result = await trickplay_service.create_missing_trickplay_folders()
-
-    except (
-        OSError,
-        RuntimeError,
-        ValueError,
-        TypeError,
-        KeyError,
-        AttributeError,
-        subprocess.SubprocessError,
-    ) as ex:
-        log(
-            f"<!> Missing TrickPlay maintenance endpoint failed: "
-            f"{type(ex).__name__}: {ex}"
-        )
-
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "success": False,
-                "message": "Missing TrickPlay folder maintenance failed.",
-                "errorType": type(ex).__name__,
-                "error": str(ex),
-            },
-        ) from ex
-
-    result_dict = _maintenance_result_to_dict(result)
-
-    if isinstance(result_dict, dict) and not result_dict.get("success", False):
-        log("<!> Missing TrickPlay maintenance returned a failure result.")
-
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=result_dict,
-        )
-
-    return result_dict
+    return await api_maintenance.handle_create_missing_trickplay_folders(None)
 
 
 @app.get(
@@ -1304,12 +1280,7 @@ async def create_missing_trickplay_folders():
 )
 def inspect_orphaned_assets():
     """Find orphaned thumbnail and trick-play cache assets without deleting them."""
-
-    result = maintenance_routines.cleanup_all_orphans(
-        dry_run=True,
-    )
-
-    return _maintenance_result_to_dict(result)
+    return api_maintenance.handle_inspect_orphans(None)
 
 
 @app.post(
@@ -1318,12 +1289,7 @@ def inspect_orphaned_assets():
 )
 def cleanup_orphaned_assets():
     """Delete orphaned thumbnail and trick-play cache assets."""
-
-    result = maintenance_routines.cleanup_all_orphans(
-        dry_run=False,
-    )
-
-    return _maintenance_result_to_dict(result)
+    return api_maintenance.handle_cleanup_orphans(None)
 
 
 @app.get(
@@ -1338,13 +1304,7 @@ def validate_video_assets(
     ),
 ):
     """Validate the thumbnail and optionally trick-play assets for one video."""
-
-    result = maintenance_routines.validate_video_assets(
-        file_id,
-        validate_trickplay_assets=validate_trickplay_assets,
-    )
-
-    return _maintenance_result_to_dict(result)
+    return api_maintenance.handle_validate_video_assets(None, file_id, validate_trickplay_assets)
 
 
 @app.post(
@@ -1363,14 +1323,7 @@ def repair_video_assets(
     ),
 ):
     """Repair selected cached assets for one video."""
-
-    result = maintenance_routines.repair_video_assets(
-        file_id,
-        repair_thumbnail_asset=repair_thumbnail_asset,
-        repair_trickplay_assets=repair_trickplay_assets,
-    )
-
-    return _maintenance_result_to_dict(result)
+    return api_maintenance.handle_repair_video_assets(None, file_id, repair_thumbnail_asset, repair_trickplay_assets)
 
 
 @app.post(
@@ -1400,16 +1353,14 @@ def run_maintenance(
     ),
 ):
     """Run the complete cache maintenance process with the selected options."""
-
-    result = maintenance_routines.run_cache_maintenance(
+    return api_maintenance.handle_run_maintenance(
+        None,
         validate_trickplay_assets=validate_trickplay_assets,
         repair_thumbnails=repair_thumbnails,
         repair_trickplay_assets=repair_trickplay_assets,
         cleanup_orphans=cleanup_orphans,
         include_video_results=include_video_results,
     )
-
-    return _maintenance_result_to_dict(result)
 
 
 # ============================================================================

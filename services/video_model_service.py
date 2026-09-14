@@ -295,14 +295,36 @@ def generate_thumbnail(file_path):
     log(f"THUMBNAIL REQUEST: {os.path.basename(file_path)}")
 
     if ffmpeg_service.FFMPEG_PATH:
+        # Probe once for duration so we can avoid seeking past EOF on short videos.
+        metadata = ffmpeg_service.probe_video_metadata(file_path)
+
+        duration = metadata.get("duration") if isinstance(metadata, dict) else None
+
+        try:
+            duration = float(duration) if duration is not None else None
+        except (TypeError, ValueError):
+            duration = None
+
+        # Determine the base seek time to try first:
+        # - Prefer the configured THUMBNAIL_SEEK_SECONDS when the video is longer.
+        # - When the video is shorter, try near the end of the video (90%).
+        if duration and duration > 0:
+            if duration >= THUMBNAIL_SEEK_SECONDS:
+                base_seek = float(THUMBNAIL_SEEK_SECONDS)
+            else:
+                # Use 90% of the duration to avoid hitting EOF exactly.
+                base_seek = max(0.5, duration * 0.9)
+        else:
+            base_seek = float(THUMBNAIL_SEEK_SECONDS)
+
         percent = 100
 
         while percent >= 0:
-            seek_seconds = THUMBNAIL_SEEK_SECONDS * percent / 100
+            seek_seconds = base_seek * percent / 100
 
             log(
                 f"--> Trying thumbnail at "
-                f"{percent}% of configured seek time "
+                f"{percent}% of base seek time "
                 f"({seek_seconds:.1f} seconds) for "
                 f"'{os.path.basename(file_path)}'..."
             )

@@ -233,6 +233,72 @@ class MediaFileHandler(FileSystemEventHandler):
                 )
             )
 
+    def on_moved(self, event) -> None:
+        """Treat moved files/directories as created events for indexing.
+
+        Many platforms emit a move/rename event when files are relocated
+        between mounts or drives; the watcher previously handled only
+        'created' events so moved-in files could be missed. Treat the
+        destination path as a created event so moved files are indexed.
+        """
+        # Prefer destination path for moved events
+        try:
+            dest_path = str(event.dest_path)
+        except Exception:
+            return
+
+        # Reuse the same filtering logic as on_created
+        path_lower = dest_path.lower()
+
+        if (
+            any(
+                part.startswith(".")
+                for part in dest_path.split("/")
+            )
+            or any(
+                ignored in path_lower
+                for ignored in IGNORED_DIRS
+            )
+        ):
+            return
+
+        if event.is_directory:
+            EVENT_QUEUE.put(("directory", dest_path))
+            return
+
+        if any(ignored_ext in path_lower for ignored_ext in IGNORED_EXTENSIONS):
+            return
+
+        ext = os.path.splitext(path_lower)[1]
+
+        if ext in ALLOWED_EXTENSIONS:
+            EVENT_QUEUE.put(("file", dest_path))
+
+    def on_modified(self, event) -> None:
+        """Also treat some modifications as potential new files.
+
+        Some copy/move operations are observed as a sequence of modified
+        events. Handle modified events for allowed extensions so late
+        writes can still be indexed.
+        """
+        full_path = str(event.src_path)
+
+        path_lower = full_path.lower()
+
+        if (
+            any(part.startswith(".") for part in full_path.split("/"))
+            or any(ignored in path_lower for ignored in IGNORED_DIRS)
+        ):
+            return
+
+        if any(ignored_ext in path_lower for ignored_ext in IGNORED_EXTENSIONS):
+            return
+
+        ext = os.path.splitext(path_lower)[1]
+
+        if ext in ALLOWED_EXTENSIONS:
+            EVENT_QUEUE.put(("file", full_path))
+
 
 def start_file_watcher() -> BaseObserver | None:
     """Start the filesystem watcher."""
