@@ -366,6 +366,11 @@ class ReindexRequest(BaseModel):
     )
 
 
+class ReindexDirectoryRequest(BaseModel):
+    drive: str = Field(..., description="Drive name, e.g. 'Vids'")
+    directory: str | None = Field(None, description="Directory path under the drive, e.g. '0Q' or '/0Q'")
+
+
 # ============================================================================
 # FastAPI Lifespan
 # ============================================================================
@@ -671,6 +676,19 @@ def reindex_drives(request: Request, body: ReindexRequest):
         request,
         body.model_dump() if hasattr(body, "model_dump") else body.dict(),
     )
+
+
+
+@app.post(
+    "/api/reindex/directory",
+    tags=["Maintenance"],
+)
+def reindex_directory(request: Request, body: ReindexDirectoryRequest):
+    """Reindex a single directory on a specific drive."""
+
+    payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+
+    return api_maintenance.handle_reindex_directory(request, payload)
 
 
 # ============================================================================

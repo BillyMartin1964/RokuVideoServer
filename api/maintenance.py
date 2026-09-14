@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 import services.trickplay_service as trickplay_service
 import tools.maintenance_routines as maintenance_routines
 from config import log
+from services.video_service import ensure_directory_indexed
 
 import config
 from services.drive_service import get_authorized_drives
@@ -133,3 +134,47 @@ def handle_run_maintenance(request, validate_trickplay_assets: bool = False, rep
     )
 
     return JSONResponse(content=result.to_dict(include_video_results))
+
+
+def handle_reindex_directory(request, body: dict) -> JSONResponse:
+    """Reindex a specific directory on a drive.
+
+    Body expected: { "drive": "Vids", "directory": "0Q" }
+
+    The `directory` value may be empty or None to reindex the drive root.
+    """
+    del request
+
+    if not isinstance(body, dict):
+        return JSONResponse(content={"success": False, "error": "Invalid payload"}, status_code=400)
+
+    drive = str(body.get("drive") or "").strip()
+    directory = body.get("directory")
+
+    if not drive:
+        return JSONResponse(content={"success": False, "error": "drive is required"}, status_code=400)
+
+    try:
+        reindexed = ensure_directory_indexed(drive, directory)
+
+        return JSONResponse(
+            content={
+                "success": True,
+                "drive": drive,
+                "directory": directory or "",
+                "reindexed": bool(reindexed),
+            }
+        )
+
+    except Exception as ex:
+        log(f"<!> Reindex directory failed for {drive}/{directory}: {type(ex).__name__}: {ex}")
+
+        return JSONResponse(
+            content={
+                "success": False,
+                "drive": drive,
+                "directory": directory or "",
+                "error": str(ex),
+            },
+            status_code=500,
+        )

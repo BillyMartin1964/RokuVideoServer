@@ -174,11 +174,89 @@ def run_ffmpeg_thumbnail(
             check=False,
         )
 
-        return (
+        success = (
             result.returncode == 0
             and os.path.exists(thumb_path)
             and os.path.getsize(thumb_path) > 0
         )
+
+        if success:
+            return True
+
+        # Log ffmpeg stderr for diagnostics (trim to reasonable length)
+        try:
+            stderr_snippet = (result.stderr or "").strip()
+            if len(stderr_snippet) > 1000:
+                stderr_snippet = stderr_snippet[:1000] + "..."
+        except Exception:
+            stderr_snippet = "(could not read ffmpeg stderr)"
+
+        log(
+            f"<!> FFmpeg thumbnail fast-seek failed for {os.path.basename(file_path)}: returncode={result.returncode} stderr={stderr_snippet}"
+        )
+
+        # Retry once using a precise seek (seek after input) which is slower
+        precise_cmd = [
+            ffmpeg_service.FFMPEG_PATH,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            file_path,
+            "-ss",
+            str(seek_seconds),
+            "-frames:v",
+            "1",
+            "-vf",
+            pad_filter,
+            "-q:v",
+            "3",
+            "-y",
+            thumb_path,
+        ]
+
+        try:
+            result2 = subprocess.run(
+                precise_cmd,
+                capture_output=True,
+                text=True,
+                timeout=THUMBNAIL_TIMEOUT_SECONDS,
+                check=False,
+            )
+
+            success2 = (
+                result2.returncode == 0
+                and os.path.exists(thumb_path)
+                and os.path.getsize(thumb_path) > 0
+            )
+
+            if success2:
+                log(
+                    f"--> FFmpeg precise-seek succeeded for {os.path.basename(file_path)} at {seek_seconds:.1f}s"
+                )
+                return True
+
+            try:
+                stderr2 = (result2.stderr or "").strip()
+                if len(stderr2) > 1000:
+                    stderr2 = stderr2[:1000] + "..."
+            except Exception:
+                stderr2 = "(could not read ffmpeg stderr)"
+
+            log(
+                f"<!> FFmpeg thumbnail precise-seek also failed for {os.path.basename(file_path)}: returncode={result2.returncode} stderr={stderr2}"
+            )
+
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            TimeoutError,
+        ) as ex2:
+            log(
+                f"<!> FFmpeg precise-seek raised exception for {os.path.basename(file_path)}: {type(ex2).__name__}: {ex2}"
+            )
+
+        return False
 
     except (
         OSError,
