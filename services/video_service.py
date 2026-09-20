@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 # Ensure project root (~/Documents/RokuVideoServer/) is in sys.path for absolute imports
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -28,9 +29,40 @@ from services import ffmpeg_service, trickplay_service
 
 
 def get_file_id(full_path: str) -> str:
-    """Generates a deterministic unique ID based on the normalized file path."""
+    """Reuse a catalog ID for known paths; assign a UUID to new videos."""
     normalized_path = os.path.abspath(full_path).lower()
-    return hashlib.md5(normalized_path.encode("utf-8")).hexdigest()
+    known_id = config.PATH_ID_MAP.get(normalized_path)
+    if known_id:
+        return known_id
+    if not os.path.exists(full_path):
+        # A deletion event for an unknown path must not create an identity.
+        return ""
+    with CACHE_LOCK:
+        return config.PATH_ID_MAP.setdefault(normalized_path, uuid.uuid4().hex)
+
+
+def catalog_path_ids(items: list[dict]) -> dict[str, str]:
+    return {
+        os.path.abspath(path).lower(): item["id"]
+        for item in items
+        if isinstance(item, dict)
+        if isinstance(item.get("id"), str) and item["id"]
+        if (path := item.get("path") or item.get("fullPath"))
+    }
+
+
+def video_fingerprint(path: str) -> str:
+    """Sample three parts of a video to identify a move without reading it all."""
+    size = os.path.getsize(path)
+    digest = hashlib.sha256(str(size).encode("ascii"))
+    sample_size = 256 * 1024
+    with open(path, "rb") as video:
+        for offset in (0, max(0, size // 2 - sample_size // 2), max(0, size - sample_size)):
+            video.seek(offset)
+            digest.update(video.read(sample_size))
+    if os.path.getsize(path) != size:
+        raise OSError("Video changed while fingerprinting")
+    return digest.hexdigest()
 
 
 def get_file_size(full_path: str) -> int:
@@ -84,6 +116,10 @@ def get_video_format_info(file_path: str) -> dict:
 
 
 def add_media_metadata(item_data: dict, file_path: str):
+    try:
+        item_data["contentFingerprint"] = video_fingerprint(file_path)
+    except OSError as ex:
+        log(f"<!> Fingerprint unavailable for {file_path}: {ex}")
     format_info = get_video_format_info(file_path)
 
     item_data["ext"] = format_info["extension"]
@@ -98,6 +134,7 @@ def add_media_metadata(item_data: dict, file_path: str):
 
 
 def load_disk_cache():
+    load_missing_cache()
     if not os.path.exists(FILE_CACHE_FILE):
         log("--> No existing video catalog cache found.")
         return
@@ -111,11 +148,19 @@ def load_disk_cache():
 
         normalized_list = []
         normalized_map = {}
+        fingerprints_added = False
 
         for item in data:
             if isinstance(item, dict):
                 # Standardize through VideoModel contract
                 model_dict = create_video_model(item).model_dump()
+                cached_path = model_dict.get("fullPath") or ""
+                if not model_dict.get("contentFingerprint") and cached_path and os.path.isfile(cached_path):
+                    try:
+                        model_dict["contentFingerprint"] = video_fingerprint(cached_path)
+                        fingerprints_added = True
+                    except OSError:
+                        pass
 
                 if model_dict.get("fileSize", 0) == 0:
                     full_path = model_dict.get("fullPath") or model_dict.get("path")
@@ -135,12 +180,79 @@ def load_disk_cache():
         with CACHE_LOCK:
             config.FILES_LIST = normalized_list
             config.FILE_MAP = normalized_map
+            config.PATH_ID_MAP = catalog_path_ids(normalized_list)
 
         log(f"--> Loaded {len(config.FILES_LIST)} indexed videos from SSD cache.")
+        if fingerprints_added:
+            save_disk_cache()
 
     except (OSError, json.JSONDecodeError, ValueError) as ex:
         log(f"<!> Error reading video catalog cache: {type(ex).__name__}: {ex}")
 
+
+def load_missing_cache():
+    try:
+        with open(config.MISSING_CACHE_FILE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        if isinstance(data, dict):
+            with CACHE_LOCK:
+                config.MISSING_VIDEOS = {
+                    key: value for key, value in data.items()
+                    if isinstance(key, str) and isinstance(value, dict)
+                    and not os.path.exists(value.get("fullPath") or value.get("path") or "")
+                }
+    except FileNotFoundError:
+        pass
+    except (OSError, json.JSONDecodeError) as ex:
+        log(f"<!> Error reading missing video cache: {ex}")
+
+
+def save_missing_cache():
+    with CACHE_LOCK:
+        data = dict(config.MISSING_VIDEOS)
+    try:
+        temp_path = config.MISSING_CACHE_FILE + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as file:
+            json.dump(data, file)
+        os.replace(temp_path, config.MISSING_CACHE_FILE)
+    except OSError as ex:
+        log(f"<!> Error saving missing video cache: {ex}")
+
+
+def match_missing_video(fingerprint: str, new_path: str) -> dict | None:
+    """Consume a unique missing video matching this new path."""
+    if not fingerprint:
+        return None
+    with CACHE_LOCK:
+        candidates = [
+            item for item in config.MISSING_VIDEOS.values()
+            if item.get("contentFingerprint") == fingerprint
+        ]
+        other_active = [
+            item for item in config.FILES_LIST
+            if item.get("contentFingerprint") == fingerprint
+            and os.path.abspath(item.get("fullPath") or "") != os.path.abspath(new_path)
+        ]
+        if len(candidates) != 1 or other_active:
+            return None
+        item = candidates[0]
+        config.MISSING_VIDEOS.pop(item["id"], None)
+        return item
+
+
+def adopt_video_identity(new_item: dict, old_item: dict) -> dict:
+    """Keep old ID and user state while taking the newly discovered location."""
+    result = dict(old_item)
+    for field in (
+        "fullPath", "path", "drive", "directory", "name", "title",
+        "fileName", "ext", "fileSize", "contentFingerprint", "duration",
+        "width", "height",
+    ):
+        if field in new_item:
+            result[field] = new_item[field]
+    result["id"] = old_item["id"]
+    result["fileId"] = old_item["id"]
+    return result
 
 def save_disk_cache():
     try:
@@ -523,6 +635,10 @@ def ensure_directory_indexed(
 
                 added_count += 1
 
+            path = model_dict.get("path") or model_dict.get("fullPath")
+            if path:
+                config.PATH_ID_MAP[os.path.abspath(path).lower()] = file_id
+
     if added_count > 0 or updated_count > 0:
         save_disk_cache()
 
@@ -601,6 +717,10 @@ def run_catalog_scan():
     config.SCAN_IN_PROGRESS = True
     start_time = time.time()
 
+    with CACHE_LOCK:
+        previous_items = list(config.FILES_LIST)
+        missing_items = dict(config.MISSING_VIDEOS)
+
     try:
         new_list, new_map = try_spotlight_index_scan()
 
@@ -631,11 +751,61 @@ def run_catalog_scan():
                 except OSError as ex:
                     log(f"<!> Error reading /Volumes: {type(ex).__name__}: {ex}")
 
+        # Match a disappeared video to one newly found path only when both
+        # sides have a unique fingerprint. Identical copies stay separate.
+        previous_by_id = {item.get("id"): item for item in previous_items}
+        previously_active_paths = {
+            os.path.abspath(path).lower()
+            for item in previous_items
+            if (path := item.get("fullPath") or item.get("path"))
+            and os.path.exists(path)
+        }
+        valid_video_ids.update(config.MISSING_VIDEOS)
+        for index, new_item in enumerate(new_list):
+            old = previous_by_id.get(new_item.get("id"))
+            if old:
+                new_list[index] = adopt_video_identity(new_item, old)
+
+        for old in previous_items:
+            old_path = old.get("fullPath") or old.get("path") or ""
+            if old_path and not os.path.exists(old_path) and old.get("contentFingerprint"):
+                missing_items.setdefault(old["id"], old)
+
+        matched_ids = set()
+        for old_id, old in missing_items.items():
+            fingerprint = old.get("contentFingerprint")
+            if not fingerprint:
+                continue
+            old_matches = [
+                candidate for candidate in missing_items.values()
+                if candidate.get("contentFingerprint") == fingerprint
+            ]
+            new_matches = [
+                (index, candidate) for index, candidate in enumerate(new_list)
+                if candidate.get("contentFingerprint") == fingerprint
+                and candidate.get("id") != old_id
+                and os.path.abspath(candidate.get("fullPath") or "").lower()
+                not in previously_active_paths
+            ]
+            if len(old_matches) == 1 and len(new_matches) == 1:
+                index, candidate = new_matches[0]
+                new_list[index] = adopt_video_identity(candidate, old)
+                matched_ids.add(old_id)
+
+        for old_id in matched_ids:
+            missing_items.pop(old_id, None)
+        new_map = {item["id"]: item for item in new_list}
+        for active_id in new_map:
+            missing_items.pop(active_id, None)
+
         with CACHE_LOCK:
             config.FILES_LIST = new_list
             config.FILE_MAP = new_map
+            config.PATH_ID_MAP = catalog_path_ids(new_list)
+            config.MISSING_VIDEOS = missing_items
 
         save_disk_cache()
+        save_missing_cache()
 
         cleanup_media_cache()
 

@@ -20,9 +20,14 @@ from models.directory_model import DirectoryModel, normalize_directory_path
 from models.video_model import create_video_model
 from services.video_service import (
     add_media_metadata,
+    adopt_video_identity,
     get_file_id,
+    match_missing_video,
     queue_thumbnail_for_indexed_video,
+    run_catalog_scan,
     save_disk_cache,
+    save_missing_cache,
+    video_fingerprint,
 )
 
 # Queue for background processing of watcher events
@@ -38,6 +43,64 @@ def process_event_worker() -> None:
 
             # Brief delay to allow file copy/write operations to finish settling
             time.sleep(1.5)
+
+            if event_type == "rescan":
+                run_catalog_scan()
+                continue
+
+            if event_type == "deleted":
+                # A move between volumes can appear as a copy followed by a
+                # delete. Drop the old path once it has actually disappeared.
+                if not os.path.exists(full_path):
+                    file_id = get_file_id(full_path)
+                    with CACHE_LOCK:
+                        removed = config.FILE_MAP.pop(file_id, None)
+                        if removed is not None:
+                            config.PATH_ID_MAP.pop(os.path.abspath(full_path).lower(), None)
+                            if removed.get("contentFingerprint"):
+                                config.MISSING_VIDEOS[file_id] = removed
+                            config.FILES_LIST = [
+                                item for item in config.FILES_LIST
+                                if item.get("id") != file_id
+                            ]
+                    if removed is not None:
+                        # A cross-drive copy may already have been indexed.
+                        fingerprint = removed.get("contentFingerprint")
+                        if fingerprint:
+                            with CACHE_LOCK:
+                                active_items = list(config.FILES_LIST)
+                            candidates = []
+                            for item in active_items:
+                                path = item.get("fullPath") or ""
+                                try:
+                                    if (
+                                        path
+                                        and os.path.getsize(path) == removed.get("fileSize")
+                                        and video_fingerprint(path) == fingerprint
+                                    ):
+                                        candidates.append(item)
+                                except OSError:
+                                    continue
+                            if len(candidates) == 1:
+                                candidate = candidates[0]
+                                candidate_path = candidate.get("fullPath") or ""
+                                if candidate_path and os.path.isfile(candidate_path):
+                                    with CACHE_LOCK:
+                                        candidate["contentFingerprint"] = fingerprint
+                                    old = match_missing_video(fingerprint, candidate_path)
+                                    if old:
+                                        restored = adopt_video_identity(candidate, old)
+                                        with CACHE_LOCK:
+                                            config.FILE_MAP.pop(candidate["id"], None)
+                                            config.FILE_MAP[old["id"]] = restored
+                                            config.FILES_LIST = [
+                                                restored if item.get("id") == candidate["id"] else item
+                                                for item in config.FILES_LIST
+                                            ]
+                                            config.PATH_ID_MAP[os.path.abspath(candidate_path).lower()] = old["id"]
+                        save_missing_cache()
+                        save_disk_cache()
+                continue
 
             if not os.path.exists(full_path):
                 continue
@@ -138,14 +201,41 @@ def process_event_worker() -> None:
                     raw_item
                 ).model_dump()
 
+                # Metadata extraction can outlive a move or deletion.
+                if not os.path.exists(full_path):
+                    continue
+
+                old_item = match_missing_video(
+                    model_dict.get("contentFingerprint", ""), full_path
+                )
+                if old_item:
+                    provisional_id = file_id
+                    model_dict = adopt_video_identity(model_dict, old_item)
+                    file_id = old_item["id"]
+                else:
+                    provisional_id = file_id
+
                 # Fast in-memory atomic cache update
                 with CACHE_LOCK:
+                    if provisional_id != file_id:
+                        config.FILE_MAP.pop(provisional_id, None)
+                    existing = config.FILE_MAP.get(file_id)
+                    if existing and existing.get("fullPath") != full_path:
+                        model_dict = adopt_video_identity(model_dict, existing)
+                        old_path = existing.get("fullPath") or ""
+                        if old_path:
+                            config.PATH_ID_MAP.pop(os.path.abspath(old_path).lower(), None)
+                    if existing and existing.get("fullPath") == full_path:
+                        for url_field in ("streamUrl", "thumbnailUrl", "trickPlayUrl"):
+                            if existing.get(url_field):
+                                model_dict[url_field] = existing[url_field]
                     config.FILE_MAP[file_id] = model_dict
+                    config.PATH_ID_MAP[os.path.abspath(full_path).lower()] = file_id
 
                     config.FILES_LIST = [
                         item
                         for item in config.FILES_LIST
-                        if item.get("id") != file_id
+                        if item.get("id") not in (file_id, provisional_id)
                     ]
 
                     config.FILES_LIST.append(model_dict)
@@ -161,6 +251,8 @@ def process_event_worker() -> None:
 
                 # Save disk cache after releasing CACHE_LOCK
                 save_disk_cache()
+                if old_item:
+                    save_missing_cache()
 
                 log(
                     f"--> Indexed new video: "
@@ -247,6 +339,16 @@ class MediaFileHandler(FileSystemEventHandler):
         except Exception:
             return
 
+        if not event.is_directory:
+            source_key = os.path.abspath(str(event.src_path)).lower()
+            destination_key = os.path.abspath(dest_path).lower()
+            with CACHE_LOCK:
+                old_id = config.PATH_ID_MAP.pop(source_key, None)
+                if old_id:
+                    config.PATH_ID_MAP[destination_key] = old_id
+            if not old_id:
+                self.on_deleted(event)
+
         # Reuse the same filtering logic as on_created
         path_lower = dest_path.lower()
 
@@ -263,7 +365,7 @@ class MediaFileHandler(FileSystemEventHandler):
             return
 
         if event.is_directory:
-            EVENT_QUEUE.put(("directory", dest_path))
+            EVENT_QUEUE.put(("rescan", dest_path))
             return
 
         if any(ignored_ext in path_lower for ignored_ext in IGNORED_EXTENSIONS):
@@ -273,6 +375,14 @@ class MediaFileHandler(FileSystemEventHandler):
 
         if ext in ALLOWED_EXTENSIONS:
             EVENT_QUEUE.put(("file", dest_path))
+
+    def on_deleted(self, event) -> None:
+        if event.is_directory:
+            EVENT_QUEUE.put(("rescan", str(event.src_path)))
+            return
+        full_path = str(event.src_path)
+        if os.path.splitext(full_path.lower())[1] in ALLOWED_EXTENSIONS:
+            EVENT_QUEUE.put(("deleted", full_path))
 
     def on_modified(self, event) -> None:
         """Also treat some modifications as potential new files.

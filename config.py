@@ -24,6 +24,7 @@ THUMB_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "roku_thumbs")
 TRICKPLAY_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "roku_trickplay")
 
 FILE_CACHE_FILE = os.path.join(CACHE_ROOT_DIR, "roku_files_cache.json")
+MISSING_CACHE_FILE = os.path.join(CACHE_ROOT_DIR, "roku_missing_videos.json")
 
 DEFAULT_POSTER_FILE = os.path.join(
     THUMB_CACHE_DIR,
@@ -169,6 +170,8 @@ CACHE_LOCK = threading.Lock()
 
 FILE_MAP: dict[str, dict[str, Any]] = {}
 FILES_LIST: list[dict[str, Any]] = []
+PATH_ID_MAP: dict[str, str] = {}
+MISSING_VIDEOS: dict[str, dict[str, Any]] = {}
 
 # Directory Index Cache (dirKey -> DirectoryModel dict)
 DIRECTORIES_MAP: dict[str, dict[str, Any]] = {}

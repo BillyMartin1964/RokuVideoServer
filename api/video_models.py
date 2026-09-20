@@ -1,5 +1,7 @@
 import os
 import shutil
+import hashlib
+import uuid
 
 """Modified on 9/3/2026"""
 
@@ -39,6 +41,45 @@ def _get_video_item(file_id: str):
 def _get_video_path(item: dict) -> str:
     """Return the physical path stored in a video catalog item."""
     return item.get("path") or item.get("fullPath") or ""
+
+
+def _file_digest(path: str) -> bytes:
+    digest = hashlib.sha256()
+    with open(path, "rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.digest()
+
+
+def _move_verified(src_path: str, dest_path: str) -> None:
+    """Publish a verified copy, then remove the source."""
+    temp_path = f"{dest_path}.{uuid.uuid4().hex}.part"
+    source_before = os.stat(src_path)
+    try:
+        shutil.copy2(src_path, temp_path)
+        source_after = os.stat(src_path)
+        if (
+            source_before.st_size != source_after.st_size
+            or source_before.st_mtime_ns != source_after.st_mtime_ns
+            or os.path.getsize(temp_path) != source_after.st_size
+            or _file_digest(src_path) != _file_digest(temp_path)
+        ):
+            raise OSError("Copy verification failed; source was preserved.")
+
+        source_verified = os.stat(src_path)
+        if (
+            source_verified.st_size != source_before.st_size
+            or source_verified.st_mtime_ns != source_before.st_mtime_ns
+        ):
+            raise OSError("Source changed during verification; source was preserved.")
+
+        # Make the verified file visible under its final name before deleting
+        # the source. A failure leaves the source in place for a safe retry.
+        os.replace(temp_path, dest_path)
+        os.unlink(src_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 def _normalize_drive(value) -> str:
@@ -1232,7 +1273,7 @@ def handle_move_video(
     # ------------------------------------------------------------
 
     try:
-        shutil.move(
+        _move_verified(
             src_path,
             dest_path,
         )
@@ -1260,7 +1301,7 @@ def handle_move_video(
 
     base_url = _get_base_url(request)
 
-    new_id = get_file_id(dest_path)
+    new_id = file_id
 
     destination_volume_root = os.path.abspath(
         os.path.join(
@@ -1314,6 +1355,11 @@ def handle_move_video(
 
     updated_item["title"] = os.path.splitext(dest_filename)[0]
 
+    # Cached resource URLs can contain an obsolete video ID.
+    # Let the model build URLs for the new ID.
+    updated_item.pop("trickPlayUrl", None)
+    updated_item.pop("bifUrl", None)
+
     updated_model = _model_to_dict(
         updated_item,
         base_url,
@@ -1324,6 +1370,8 @@ def handle_move_video(
     # ------------------------------------------------------------
 
     with CACHE_LOCK:
+        config.PATH_ID_MAP.pop(os.path.abspath(src_path).lower(), None)
+        config.PATH_ID_MAP[os.path.abspath(dest_path).lower()] = file_id
         config.FILE_MAP.pop(
             file_id,
             None,
@@ -1331,10 +1379,13 @@ def handle_move_video(
 
         config.FILE_MAP[new_id] = updated_model
 
-        for index, catalog_item in enumerate(config.FILES_LIST):
-            if catalog_item.get("id") == file_id:
-                config.FILES_LIST[index] = updated_model
-                break
+        # The watcher may have indexed the destination while a cross-volume
+        # move was copying. Keep exactly one entry for the final path.
+        config.FILES_LIST = [
+            catalog_item for catalog_item in config.FILES_LIST
+            if catalog_item.get("id") not in (file_id, new_id)
+        ]
+        config.FILES_LIST.append(updated_model)
 
     save_disk_cache()
 
@@ -1493,6 +1544,8 @@ def handle_rename_video(
     )
 
     with CACHE_LOCK:
+        config.PATH_ID_MAP.pop(os.path.abspath(src_path).lower(), None)
+        config.PATH_ID_MAP[os.path.abspath(dest_path).lower()] = new_id
         config.FILE_MAP.pop(
             file_id,
             None,
@@ -1565,6 +1618,7 @@ def handle_delete_video(
             )
 
     with CACHE_LOCK:
+        config.PATH_ID_MAP.pop(os.path.abspath(src_path).lower(), None)
         config.FILE_MAP.pop(
             file_id,
             None,

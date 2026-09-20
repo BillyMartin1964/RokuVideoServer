@@ -76,6 +76,7 @@ class VideoModel(BaseModel):
     # ------------------------------------------------------------------------
 
     fileSize: int = 0
+    contentFingerprint: str = ""
 
     description: str = ""
 
@@ -367,6 +368,7 @@ def create_video_model(
         streamUrl=stream_url,
         description=description,
         fileSize=file_size,
+        contentFingerprint=str(data.get("contentFingerprint") or ""),
         duration=duration,
         height=height,
         width=width,

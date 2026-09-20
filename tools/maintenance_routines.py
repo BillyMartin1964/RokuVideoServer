@@ -696,6 +696,9 @@ def get_all_indexed_file_ids() -> set[str]:
         if file_id:
             file_ids.add(file_id)
 
+    with CACHE_LOCK:
+        file_ids.update(config.MISSING_VIDEOS)
+
     return file_ids
 
 
@@ -1538,6 +1541,11 @@ def get_expected_thumbnail_paths() -> set[str]:
 
         if thumbnail_path:
             expected_paths.add(os.path.abspath(thumbnail_path))
+
+    with CACHE_LOCK:
+        missing_ids = tuple(config.MISSING_VIDEOS)
+    for file_id in missing_ids:
+        expected_paths.add(os.path.abspath(os.path.join(config.THUMB_CACHE_DIR, f"{file_id}.jpg")))
 
     return expected_paths
 
