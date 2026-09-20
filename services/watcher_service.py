@@ -21,6 +21,7 @@ from models.video_model import create_video_model
 from services.video_service import (
     add_media_metadata,
     adopt_video_identity,
+    catalog_path,
     get_file_id,
     match_missing_video,
     queue_thumbnail_for_indexed_video,
@@ -217,25 +218,37 @@ def process_event_worker() -> None:
 
                 # Fast in-memory atomic cache update
                 with CACHE_LOCK:
-                    if provisional_id != file_id:
-                        config.FILE_MAP.pop(provisional_id, None)
+                    path_key = os.path.abspath(full_path).lower()
+                    canonical_id = (
+                        file_id if old_item else config.PATH_ID_MAP.get(path_key, file_id)
+                    )
+                    if canonical_id != file_id:
+                        file_id = canonical_id
+                        model_dict["id"] = canonical_id
+                        model_dict["fileId"] = canonical_id
                     existing = config.FILE_MAP.get(file_id)
-                    if existing and existing.get("fullPath") != full_path:
+                    if existing:
                         model_dict = adopt_video_identity(model_dict, existing)
                         old_path = existing.get("fullPath") or ""
-                        if old_path:
+                        if old_path and old_path != full_path:
                             config.PATH_ID_MAP.pop(os.path.abspath(old_path).lower(), None)
-                    if existing and existing.get("fullPath") == full_path:
-                        for url_field in ("streamUrl", "thumbnailUrl", "trickPlayUrl"):
-                            if existing.get(url_field):
-                                model_dict[url_field] = existing[url_field]
+                    stale_ids = {
+                        item.get("id") for item in config.FILES_LIST
+                        if catalog_path(item) == path_key and item.get("id") != file_id
+                    }
+                    stale_ids.add(provisional_id)
+                    stale_ids.discard(file_id)
+                    for stale_id in stale_ids:
+                        config.FILE_MAP.pop(stale_id, None)
                     config.FILE_MAP[file_id] = model_dict
-                    config.PATH_ID_MAP[os.path.abspath(full_path).lower()] = file_id
+                    config.PATH_ID_MAP[path_key] = file_id
 
                     config.FILES_LIST = [
                         item
                         for item in config.FILES_LIST
-                        if item.get("id") not in (file_id, provisional_id)
+                        if item.get("id") not in stale_ids
+                        and item.get("id") != file_id
+                        and catalog_path(item) != path_key
                     ]
 
                     config.FILES_LIST.append(model_dict)

@@ -13,6 +13,7 @@ from config import CACHE_LOCK, log, log_separator
 from models.video_model import create_video_model
 from services.video_model_service import generate_thumbnail
 from services.video_service import (
+    catalog_path,
     ensure_directory_indexed,
     get_file_id,
     save_disk_cache,
@@ -1372,6 +1373,14 @@ def handle_move_video(
     with CACHE_LOCK:
         config.PATH_ID_MAP.pop(os.path.abspath(src_path).lower(), None)
         config.PATH_ID_MAP[os.path.abspath(dest_path).lower()] = file_id
+        stale_ids = {
+            catalog_item.get("id")
+            for catalog_item in config.FILES_LIST
+            if catalog_path(catalog_item) == os.path.abspath(dest_path).lower()
+            and catalog_item.get("id") != file_id
+        }
+        for stale_id in stale_ids:
+            config.FILE_MAP.pop(stale_id, None)
         config.FILE_MAP.pop(
             file_id,
             None,
@@ -1384,6 +1393,7 @@ def handle_move_video(
         config.FILES_LIST = [
             catalog_item for catalog_item in config.FILES_LIST
             if catalog_item.get("id") not in (file_id, new_id)
+            and catalog_path(catalog_item) != os.path.abspath(dest_path).lower()
         ]
         config.FILES_LIST.append(updated_model)
 

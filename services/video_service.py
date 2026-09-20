@@ -51,6 +51,38 @@ def catalog_path_ids(items: list[dict]) -> dict[str, str]:
     }
 
 
+def catalog_path(item: dict) -> str:
+    path = item.get("fullPath") or item.get("path") or ""
+    return os.path.abspath(path).lower() if path else ""
+
+
+def deduplicate_catalog(items: list[dict]) -> list[dict]:
+    """Keep one model per physical path, favoring its existing media assets."""
+    chosen: dict[str, dict] = {}
+    order: list[str] = []
+
+    def score(item: dict) -> int:
+        file_id = item.get("id") or ""
+        return (
+            8 * os.path.isdir(os.path.join(config.TRICKPLAY_CACHE_DIR, file_id))
+            + 4 * os.path.isfile(os.path.join(config.THUMB_CACHE_DIR, f"{file_id}.jpg"))
+            + 2 * bool(item.get("bookmarkPosition"))
+            + bool(item.get("streamUrl"))
+        )
+
+    for item in items:
+        path = catalog_path(item)
+        if not path:
+            continue
+        if path not in chosen:
+            chosen[path] = item
+            order.append(path)
+        elif score(item) >= score(chosen[path]):
+            chosen[path] = item
+
+    return [chosen[path] for path in order]
+
+
 def video_fingerprint(path: str) -> str:
     """Sample three parts of a video to identify a move without reading it all."""
     size = os.path.getsize(path)
@@ -177,13 +209,17 @@ def load_disk_cache():
                     normalized_list.append(model_dict)
                     normalized_map[file_id] = model_dict
 
+        original_count = len(normalized_list)
+        normalized_list = deduplicate_catalog(normalized_list)
+        normalized_map = {item["id"]: item for item in normalized_list}
+
         with CACHE_LOCK:
             config.FILES_LIST = normalized_list
             config.FILE_MAP = normalized_map
             config.PATH_ID_MAP = catalog_path_ids(normalized_list)
 
         log(f"--> Loaded {len(config.FILES_LIST)} indexed videos from SSD cache.")
-        if fingerprints_added:
+        if fingerprints_added or len(normalized_list) != original_count:
             save_disk_cache()
 
     except (OSError, json.JSONDecodeError, ValueError) as ex:
@@ -718,7 +754,9 @@ def run_catalog_scan():
     start_time = time.time()
 
     with CACHE_LOCK:
-        previous_items = list(config.FILES_LIST)
+        previous_items = deduplicate_catalog(config.FILES_LIST)
+        for item in previous_items:
+            config.PATH_ID_MAP[catalog_path(item)] = item["id"]
         missing_items = dict(config.MISSING_VIDEOS)
 
     try:
