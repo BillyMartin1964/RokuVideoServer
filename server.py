@@ -1477,7 +1477,12 @@ def stream_video(
         if not file_path and item:
             file_path = item.get("fullPath")
 
-    if not item or not file_path or not os.path.exists(file_path):
+    if not file_path or not os.path.isfile(file_path):
+        file_path = video_service.locate_missing_video(file_id)
+        if file_path:
+            video_service.relink_video_async(file_id, file_path)
+
+    if not file_path or not os.path.isfile(file_path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Video Not Found",

@@ -290,6 +290,142 @@ def adopt_video_identity(new_item: dict, old_item: dict) -> dict:
     result["fileId"] = old_item["id"]
     return result
 
+
+_RELINK_OVERRIDES: dict[str, str] = {}
+_RELINK_IN_PROGRESS: set[str] = set()
+
+
+def locate_missing_video(file_id: str) -> str | None:
+    """Find a verified path without waiting for catalog repair."""
+    with CACHE_LOCK:
+        old_item = config.FILE_MAP.get(file_id) or config.MISSING_VIDEOS.get(file_id)
+        old_item = dict(old_item) if old_item else None
+        override = _RELINK_OVERRIDES.get(file_id)
+    if not old_item:
+        return None
+
+    if override and os.path.isfile(override):
+        return override
+
+    old_path = old_item.get("fullPath") or old_item.get("path") or ""
+    if old_path and os.path.isfile(old_path):
+        return old_path
+    fingerprint = old_item.get("contentFingerprint")
+    filename = os.path.basename(old_path)
+    size = old_item.get("fileSize")
+    if not fingerprint or not filename or not size or not os.path.isdir(VOLUMES_DIR):
+        return None
+
+    matches = []
+    for directory, subdirectories, filenames in os.walk(VOLUMES_DIR):
+        subdirectories[:] = [
+            name for name in subdirectories
+            if not name.startswith(".") and name.lower() not in IGNORED_DIRS
+        ]
+        for name in filenames:
+            if name.lower() != filename.lower():
+                continue
+            candidate = os.path.join(directory, name)
+            try:
+                if os.path.getsize(candidate) == size and video_fingerprint(candidate) == fingerprint:
+                    matches.append(candidate)
+            except OSError:
+                continue
+
+    if len(matches) != 1:
+        log(f"--> Missing video {file_id}: found {len(matches)} matching paths.")
+        return None
+
+    new_path = matches[0]
+    with CACHE_LOCK:
+        _RELINK_OVERRIDES[file_id] = new_path
+    return new_path
+
+
+def _relink_known_video(file_id: str, new_path: str) -> str | None:
+    """Save a previously verified destination under the original ID."""
+    with CACHE_LOCK:
+        old_item = config.FILE_MAP.get(file_id) or config.MISSING_VIDEOS.get(file_id)
+        old_item = dict(old_item) if old_item else None
+    if not old_item:
+        return None
+    old_path = old_item.get("fullPath") or old_item.get("path") or ""
+    try:
+        if (
+            os.path.getsize(new_path) != old_item.get("fileSize")
+            or video_fingerprint(new_path) != old_item.get("contentFingerprint")
+        ):
+            return None
+    except OSError:
+        return None
+
+    relative = os.path.relpath(new_path, VOLUMES_DIR)
+    parts = relative.split(os.sep)
+    if len(parts) < 2:
+        return None
+    drive = parts[0]
+    directory = "/" + "/".join(parts[1:-1]) if len(parts) > 2 else "/"
+    new_item = adopt_video_identity(
+        {
+            "fullPath": new_path,
+            "path": new_path,
+            "drive": drive,
+            "directory": directory,
+        },
+        old_item,
+    )
+    new_item["subfolder"] = directory
+    new_key = catalog_path(new_item)
+
+    with CACHE_LOCK:
+        current = config.FILE_MAP.get(file_id)
+        current_path = (current or {}).get("fullPath") or (current or {}).get("path")
+        if current_path and os.path.isfile(current_path):
+            _RELINK_OVERRIDES.pop(file_id, None)
+            return current_path
+        stale_ids = {
+            item.get("id") for item in config.FILES_LIST
+            if catalog_path(item) == new_key and item.get("id") != file_id
+        }
+        for stale_id in stale_ids:
+            config.FILE_MAP.pop(stale_id, None)
+        config.FILES_LIST = [
+            item for item in config.FILES_LIST
+            if item.get("id") != file_id and catalog_path(item) != new_key
+        ]
+        config.FILES_LIST.append(new_item)
+        config.FILE_MAP[file_id] = new_item
+        config.PATH_ID_MAP.pop(os.path.abspath(old_path).lower(), None)
+        config.PATH_ID_MAP[new_key] = file_id
+        config.MISSING_VIDEOS.pop(file_id, None)
+        _RELINK_OVERRIDES.pop(file_id, None)
+
+    save_disk_cache()
+    save_missing_cache()
+    log(f"--> Relinked missing video {file_id} to {new_path}")
+    return new_path
+
+
+def relink_video_async(file_id: str, new_path: str) -> None:
+    with CACHE_LOCK:
+        if file_id in _RELINK_IN_PROGRESS:
+            return
+        _RELINK_IN_PROGRESS.add(file_id)
+
+    def repair() -> None:
+        try:
+            _relink_known_video(file_id, new_path)
+        finally:
+            with CACHE_LOCK:
+                _RELINK_IN_PROGRESS.discard(file_id)
+
+    threading.Thread(target=repair, daemon=True, name=f"Relink-{file_id[:8]}").start()
+
+
+def find_and_relink_video(file_id: str) -> str | None:
+    path = locate_missing_video(file_id)
+    return _relink_known_video(file_id, path) if path else None
+
 def save_disk_cache():
     try:
         with CACHE_LOCK:
