@@ -16,6 +16,7 @@ from services.video_service import (
     catalog_path,
     ensure_directory_indexed,
     find_and_relink_video,
+    refresh_directory_index,
     get_file_id,
     save_disk_cache,
 )
@@ -727,6 +728,9 @@ def handle_get_video_models(
     )
 
     base_url = _get_base_url(request)
+
+    if normalized_drive and normalized_directory is not None:
+        refresh_directory_index(normalized_drive, normalized_directory)
 
     matching = _get_matching_video_items(
         normalized_drive,

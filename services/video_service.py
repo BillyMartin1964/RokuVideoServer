@@ -846,6 +846,106 @@ def ensure_directory_indexed(
     return added_count > 0 or updated_count > 0
 
 
+def refresh_directory_index(drive_name: str, directory: str) -> None:
+    """Reconcile the files directly in a browsed folder with the catalog."""
+    parts = [part for part in directory.replace("\\", "/").split("/") if part]
+    if (
+        not drive_name
+        or drive_name in (".", "..")
+        or "/" in drive_name
+        or "\\" in drive_name
+        or any(part in (".", "..") for part in parts)
+    ):
+        return
+    root_path = os.path.abspath(VOLUMES_DIR)
+    volume_path = os.path.abspath(os.path.join(root_path, drive_name))
+    target_path = os.path.abspath(os.path.join(volume_path, *parts))
+    try:
+        if (
+            os.path.commonpath([root_path, volume_path]) != root_path
+            or os.path.commonpath([volume_path, target_path]) != volume_path
+        ):
+            return
+    except ValueError:
+        return
+    try:
+        with os.scandir(target_path) as entries:
+            files = {
+                os.path.abspath(entry.path).lower(): entry.path
+                for entry in entries
+                if entry.is_file(follow_symlinks=False)
+                and not entry.name.startswith(".")
+                and os.path.splitext(entry.name)[1].lower() in ALLOWED_EXTENSIONS
+            }
+    except OSError:
+        return
+
+    folder = "/" + "/".join(parts) if parts else "/"
+    with CACHE_LOCK:
+        indexed = {
+            catalog_path(item): item for item in config.FILES_LIST
+            if item.get("drive") == drive_name
+            and "/" + str(item.get("directory") or "").strip("/") == folder
+        }
+        missing = [item for path, item in indexed.items() if path not in files]
+        if missing:
+            missing_ids = {item["id"] for item in missing}
+            config.FILES_LIST = [
+                item for item in config.FILES_LIST if item.get("id") not in missing_ids
+            ]
+            for item in missing:
+                config.FILE_MAP.pop(item["id"], None)
+                config.PATH_ID_MAP.pop(catalog_path(item), None)
+                if item.get("contentFingerprint"):
+                    config.MISSING_VIDEOS[item["id"]] = item
+
+    added = False
+    for path_key, path in files.items():
+        if path_key in indexed:
+            continue
+        try:
+            raw_item = {
+                "id": get_file_id(path),
+                "name": os.path.splitext(os.path.basename(path))[0],
+                "title": os.path.splitext(os.path.basename(path))[0],
+                "drive": drive_name,
+                "directory": folder,
+                "fullPath": path,
+                "path": path,
+                "size": os.path.getsize(path),
+            }
+            add_media_metadata(raw_item, path)
+            if not os.path.isfile(path):
+                continue
+            model = create_video_model(raw_item).model_dump()
+        except OSError:
+            continue
+
+        old = match_missing_video(model.get("contentFingerprint", ""), path)
+        if old:
+            model = adopt_video_identity(model, old)
+        with CACHE_LOCK:
+            file_id = model["id"]
+            stale_ids = {
+                item.get("id") for item in config.FILES_LIST
+                if catalog_path(item) == path_key and item.get("id") != file_id
+            }
+            for stale_id in stale_ids:
+                config.FILE_MAP.pop(stale_id, None)
+            config.FILES_LIST = [
+                item for item in config.FILES_LIST
+                if item.get("id") != file_id and catalog_path(item) != path_key
+            ]
+            config.FILES_LIST.append(model)
+            config.FILE_MAP[file_id] = model
+            config.PATH_ID_MAP[path_key] = file_id
+        added = True
+
+    if missing or added:
+        save_disk_cache()
+        save_missing_cache()
+
+
 def cleanup_media_cache():
     with CACHE_LOCK:
         valid_video_ids = {
