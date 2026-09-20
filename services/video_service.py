@@ -316,21 +316,43 @@ def locate_missing_video(file_id: str) -> str | None:
     if not fingerprint or not filename or not size or not os.path.isdir(VOLUMES_DIR):
         return None
 
+    with CACHE_LOCK:
+        known_paths = {
+            item.get("fullPath") or item.get("path")
+            for item in config.FILES_LIST
+            if item.get("id") != file_id
+        }
+
+    # Spotlight searches by filename without walking every directory in the
+    # playback request. The watcher and startup scan cover unindexed volumes.
+    query_name = filename.replace("\\", "\\\\").replace('"', '\\"')
+    try:
+        result = subprocess.run(
+            ["mdfind", "-onlyin", VOLUMES_DIR, f'kMDItemFSName == "{query_name}"'],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        if result.returncode == 0:
+            known_paths.update(result.stdout.splitlines())
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
     matches = []
-    for directory, subdirectories, filenames in os.walk(VOLUMES_DIR):
-        subdirectories[:] = [
-            name for name in subdirectories
-            if not name.startswith(".") and name.lower() not in IGNORED_DIRS
-        ]
-        for name in filenames:
-            if name.lower() != filename.lower():
-                continue
-            candidate = os.path.join(directory, name)
-            try:
-                if os.path.getsize(candidate) == size and video_fingerprint(candidate) == fingerprint:
-                    matches.append(candidate)
-            except OSError:
-                continue
+    for candidate in known_paths:
+        if not candidate or os.path.basename(candidate).lower() != filename.lower():
+            continue
+        try:
+            if (
+                os.path.commonpath([os.path.abspath(candidate), os.path.abspath(VOLUMES_DIR)])
+                == os.path.abspath(VOLUMES_DIR)
+                and os.path.getsize(candidate) == size
+                and video_fingerprint(candidate) == fingerprint
+            ):
+                matches.append(candidate)
+        except (OSError, ValueError):
+            continue
 
     if len(matches) != 1:
         log(f"--> Missing video {file_id}: found {len(matches)} matching paths.")

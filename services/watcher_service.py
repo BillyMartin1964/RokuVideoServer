@@ -446,17 +446,34 @@ def start_file_watcher() -> BaseObserver | None:
 
     observer = Observer()
 
-    observer.schedule(
-        event_handler,
-        path=VOLUMES_DIR,
-        recursive=True,
-    )
+    watched_volumes = 0
+    try:
+        volume_names = os.listdir(VOLUMES_DIR)
+    except OSError as ex:
+        log(f"<!> Could not list mounted volumes for watcher: {ex}")
+        return None
+
+    for name in volume_names:
+        if name.startswith(".") or name.lower() in IGNORED_DIRS or name == "Macintosh HD":
+            continue
+        volume_path = os.path.join(VOLUMES_DIR, name)
+        if not os.path.isdir(volume_path):
+            continue
+        try:
+            observer.schedule(event_handler, path=volume_path, recursive=True)
+            watched_volumes += 1
+        except OSError as ex:
+            log(f"<!> Could not watch volume {volume_path}: {ex}")
+
+    if not watched_volumes:
+        log("<!> No mounted volumes available for the file watcher.")
+        return None
 
     observer.start()
 
     log(
         f"--> Non-blocking file watcher started on "
-        f"{VOLUMES_DIR}"
+        f"{watched_volumes} mounted volume(s) under {VOLUMES_DIR}"
     )
 
     return observer
