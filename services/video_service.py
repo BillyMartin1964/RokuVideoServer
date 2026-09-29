@@ -135,7 +135,17 @@ def repair_video_file_size(item: dict) -> bool:
     Returns True when the catalog item was repaired.  The filesystem remains
     authoritative; FFmpeg is only used to flag suspicious zero-byte files.
     """
-    if not isinstance(item, dict) or item.get("fileSize", 0) > 0:
+    if not isinstance(item, dict):
+        return False
+
+    # Treat both catalog spellings as one value.  A stale negative value is
+    # invalid even when it is present in the cache, so it must be refreshed.
+    try:
+        cached_size = int(item.get("fileSize", item.get("size", 0)) or 0)
+    except (TypeError, ValueError):
+        cached_size = 0
+
+    if cached_size > 0:
         return False
 
     file_path = item.get("fullPath") or item.get("path")
@@ -145,6 +155,7 @@ def repair_video_file_size(item: dict) -> bool:
     file_size = get_file_size(file_path)
     if file_size > 0:
         item["fileSize"] = file_size
+        item["size"] = file_size
         return True
 
     if os.path.isfile(file_path):

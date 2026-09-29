@@ -211,7 +211,14 @@ def create_video_model(
     # Stored in bytes.
     # ------------------------------------------------------------------------
 
-    file_size_value = data.get("fileSize") or data.get("size") or 0
+    # Prefer an explicitly supplied fileSize, but do not let an invalid
+    # legacy value hide a valid size alias.  Negative sizes have appeared in
+    # caches/clients after signed 32-bit conversion and are never valid on a
+    # filesystem.
+    file_size_value = data.get("fileSize")
+    if file_size_value is None:
+        file_size_value = data.get("size")
+    file_size_value = file_size_value or 0
 
     try:
         file_size = int(file_size_value)
@@ -224,7 +231,11 @@ def create_video_model(
     # path is present, the filesystem is authoritative and lets us repair the
     # catalog value while building the response.
     if file_size < 0:
-        file_size = 0
+        try:
+            legacy_size = int(data.get("size") or 0)
+        except (TypeError, ValueError):
+            legacy_size = 0
+        file_size = max(legacy_size, 0)
 
     if file_size == 0:
         file_path = data.get("fullPath") or data.get("path")
