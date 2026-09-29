@@ -217,6 +217,8 @@ def create_video_model(
     # filesystem.
     file_size_value = data.get("fileSize")
     if file_size_value is None:
+        file_size_value = data.get("filesize")
+    if file_size_value is None:
         file_size_value = data.get("size")
     file_size_value = file_size_value or 0
 
@@ -235,7 +237,12 @@ def create_video_model(
             legacy_size = int(data.get("size") or 0)
         except (TypeError, ValueError):
             legacy_size = 0
-        file_size = max(legacy_size, 0)
+        # Some Roku/client code stores byte counts in a signed 32-bit
+        # integer. Decode that representation before falling back to the
+        # filesystem, so a 3+ GB file is not reported as a negative size
+        # when its path is temporarily unavailable to this process.
+        unsigned_size = file_size + (1 << 32)
+        file_size = max(legacy_size, unsigned_size, 0)
 
     if file_size == 0:
         file_path = data.get("fullPath") or data.get("path")
