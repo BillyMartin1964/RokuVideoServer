@@ -1,3 +1,5 @@
+import os
+
 from pydantic import BaseModel, Field
 
 
@@ -215,6 +217,24 @@ def create_video_model(
         file_size = int(file_size_value)
     except (TypeError, ValueError):
         file_size = 0
+
+    # A negative byte count cannot come from the filesystem.  Older catalog
+    # data (or a signed 32-bit client conversion) can leave an invalid value
+    # behind, which then breaks size/free-space checks in clients.  When the
+    # path is present, the filesystem is authoritative and lets us repair the
+    # catalog value while building the response.
+    if file_size < 0:
+        file_size = 0
+
+    if file_size == 0:
+        file_path = data.get("fullPath") or data.get("path")
+        if file_path:
+            try:
+                actual_size = os.path.getsize(str(file_path))
+                if actual_size > 0:
+                    file_size = actual_size
+            except OSError:
+                pass
 
     # ------------------------------------------------------------------------
     # Duration

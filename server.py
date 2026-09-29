@@ -898,6 +898,16 @@ def get_video_model(
 
 
 @app.get(
+    "/api/video-models/{file_id}/size",
+    tags=["Video Models"],
+)
+def refresh_video_size(file_id: str):
+    """Refresh and return the authoritative size of one video file."""
+
+    return api_video_models.handle_refresh_video_size(file_id)
+
+
+@app.get(
     "/api/video-models/{file_id}/thumbnail",
     tags=["Video Models"],
 )

@@ -931,6 +931,51 @@ def handle_get_video_model(
     }
 
 
+def handle_refresh_video_size(file_id: str):
+    """Return and cache the authoritative filesystem size for one video."""
+    item = _get_video_item(file_id)
+
+    if not item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video Not Found",
+        )
+
+    file_path = _get_video_path(item)
+    if not file_path or not os.path.isfile(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video File Not Found",
+        )
+
+    try:
+        file_size = os.path.getsize(file_path)
+    except OSError as ex:
+        log(f"<!> Unable to determine video size: {type(ex).__name__}: {ex}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to determine video size.",
+        )
+
+    if file_size <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Video file is empty.",
+        )
+
+    with CACHE_LOCK:
+        item["fileSize"] = file_size
+        item["size"] = file_size
+
+    save_disk_cache()
+
+    return {
+        "success": True,
+        "fileId": file_id,
+        "fileSize": file_size,
+    }
+
+
 def handle_get_thumbnail(
     request: Request,
     file_id: str,
