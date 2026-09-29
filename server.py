@@ -20,9 +20,9 @@ from pydantic import BaseModel, Field
 import api.directories as api_directories
 import api.drives as api_drives
 import api.health as api_health
+import api.maintenance as api_maintenance
 import api.video_models as api_video_models
 import api.videos as api_videos
-import api.maintenance as api_maintenance
 import config
 from config import CACHE_LOCK, PORT, log, log_separator
 from services import (
@@ -32,7 +32,6 @@ from services import (
     video_service,
     watcher_service,
 )
-from tools import maintenance_routines
 
 # ============================================================================
 # Client Tracker Memory Store
@@ -368,7 +367,9 @@ class ReindexRequest(BaseModel):
 
 class ReindexDirectoryRequest(BaseModel):
     drive: str = Field(..., description="Drive name, e.g. 'Vids'")
-    directory: str | None = Field(None, description="Directory path under the drive, e.g. '0Q' or '/0Q'")
+    directory: str | None = Field(
+        None, description="Directory path under the drive, e.g. '0Q' or '/0Q'"
+    )
 
 
 # ============================================================================
@@ -664,7 +665,6 @@ def get_drives(
     )
 
 
-
 @app.post(
     "/api/reindex",
     tags=["Maintenance"],
@@ -676,7 +676,6 @@ def reindex_drives(request: Request, body: ReindexRequest):
         request,
         body.model_dump() if hasattr(body, "model_dump") else body.dict(),
     )
-
 
 
 @app.post(
@@ -1322,7 +1321,9 @@ def validate_video_assets(
     ),
 ):
     """Validate the thumbnail and optionally trick-play assets for one video."""
-    return api_maintenance.handle_validate_video_assets(None, file_id, validate_trickplay_assets)
+    return api_maintenance.handle_validate_video_assets(
+        None, file_id, validate_trickplay_assets
+    )
 
 
 @app.post(
@@ -1341,7 +1342,9 @@ def repair_video_assets(
     ),
 ):
     """Repair selected cached assets for one video."""
-    return api_maintenance.handle_repair_video_assets(None, file_id, repair_thumbnail_asset, repair_trickplay_assets)
+    return api_maintenance.handle_repair_video_assets(
+        None, file_id, repair_thumbnail_asset, repair_trickplay_assets
+    )
 
 
 @app.post(

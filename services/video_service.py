@@ -129,6 +129,39 @@ def get_file_size(full_path: str) -> int:
     return 0
 
 
+def repair_video_file_size(item: dict) -> bool:
+    """Refresh a cached video size when the catalog has no usable value.
+
+    Returns True when the catalog item was repaired.  The filesystem remains
+    authoritative; FFmpeg is only used to flag suspicious zero-byte files.
+    """
+    if not isinstance(item, dict) or item.get("fileSize", 0) > 0:
+        return False
+
+    file_path = item.get("fullPath") or item.get("path")
+    if not file_path:
+        return False
+
+    file_size = get_file_size(file_path)
+    if file_size > 0:
+        item["fileSize"] = file_size
+        return True
+
+    if os.path.isfile(file_path):
+        metadata = ffmpeg_service.probe_video_metadata(file_path)
+        duration = metadata.get("duration")
+        try:
+            if duration is not None and float(duration) > 1.0:
+                log(
+                    f"<!> Video metadata inconsistency: [{file_path}] "
+                    f"has duration {duration}s but file size is 0."
+                )
+        except (TypeError, ValueError):
+            pass
+
+    return False
+
+
 def get_video_format_info(file_path: str) -> dict:
     extension = os.path.splitext(file_path)[1].lower()
     info = VIDEO_FORMATS.get(extension)
@@ -181,6 +214,7 @@ def load_disk_cache():
         normalized_list = []
         normalized_map = {}
         fingerprints_added = False
+        file_sizes_repaired = False
 
         for item in data:
             if isinstance(item, dict):
@@ -194,14 +228,8 @@ def load_disk_cache():
                     except OSError:
                         pass
 
-                if model_dict.get("fileSize", 0) == 0:
-                    full_path = model_dict.get("fullPath") or model_dict.get("path")
-
-                    if full_path:
-                        file_size = get_file_size(full_path)
-
-                        if file_size > 0:
-                            model_dict["fileSize"] = file_size
+                if repair_video_file_size(model_dict):
+                    file_sizes_repaired = True
 
                 file_id = model_dict.get("id")
 
@@ -219,7 +247,7 @@ def load_disk_cache():
             config.PATH_ID_MAP = catalog_path_ids(normalized_list)
 
         log(f"--> Loaded {len(config.FILES_LIST)} indexed videos from SSD cache.")
-        if fingerprints_added or len(normalized_list) != original_count:
+        if fingerprints_added or file_sizes_repaired or len(normalized_list) != original_count:
             save_disk_cache()
 
     except (OSError, json.JSONDecodeError, ValueError) as ex:

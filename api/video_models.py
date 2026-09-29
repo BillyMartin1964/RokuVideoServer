@@ -1349,6 +1349,8 @@ def handle_move_video(
     updated_item["fileId"] = new_id
     updated_item["path"] = dest_path
     updated_item["fullPath"] = dest_path
+    # Preserve the authoritative physical size after the verified move.
+    updated_item["fileSize"] = os.path.getsize(dest_path)
 
     # The drive now belongs to the destination.
     updated_item["drive"] = resolved_drive
