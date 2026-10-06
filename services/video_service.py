@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 # Ensure project root (~/Documents/RokuVideoServer/) is in sys.path for absolute imports
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -26,6 +27,10 @@ from config import (
 )
 from models.video_model import create_video_model
 from services import ffmpeg_service, trickplay_service
+
+_DIRECTORY_REFRESH_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="directory-refresh")
+_DIRECTORY_REFRESH_LOCK = threading.Lock()
+_DIRECTORY_REFRESH_IN_PROGRESS: set[tuple[str, str]] = set()
 
 
 def get_file_id(full_path: str) -> str:
@@ -983,6 +988,32 @@ def refresh_directory_index(drive_name: str, directory: str) -> None:
     if missing or added:
         save_disk_cache()
         save_missing_cache()
+
+
+def queue_directory_refresh(drive_name: str, directory: str | None) -> bool:
+    """Refresh one directory asynchronously without scanning descendants."""
+    normalized_drive = str(drive_name or "").strip().strip("/")
+    normalized_directory = str(directory or "").replace("\\", "/").strip("/")
+    if not normalized_drive:
+        return False
+
+    key = (normalized_drive, normalized_directory)
+    with _DIRECTORY_REFRESH_LOCK:
+        if key in _DIRECTORY_REFRESH_IN_PROGRESS:
+            return False
+        _DIRECTORY_REFRESH_IN_PROGRESS.add(key)
+
+    def _refresh() -> None:
+        try:
+            refresh_directory_index(normalized_drive, normalized_directory)
+        except Exception as ex:
+            log(f"<!> Background directory refresh failed for {normalized_drive}/{normalized_directory}: {type(ex).__name__}: {ex}")
+        finally:
+            with _DIRECTORY_REFRESH_LOCK:
+                _DIRECTORY_REFRESH_IN_PROGRESS.discard(key)
+
+    _DIRECTORY_REFRESH_EXECUTOR.submit(_refresh)
+    return True
 
 
 def cleanup_media_cache():
