@@ -37,7 +37,7 @@ def _has_fatal_mp4_structure_error(stderr):
 
 
 def _has_fatal_decoder_error(stderr):
-    """Recognize decoder corruption paired with the known filter failure."""
+    """Recognize decoder/filter failures that cannot be fixed by reseeking."""
     error_text = (stderr or "").lower()
     decoder_markers = (
         "reference picture missing",
@@ -47,7 +47,10 @@ def _has_fatal_decoder_error(stderr):
     )
     return (
         "padded dimensions cannot be smaller than input dimensions" in error_text
-        and any(marker in error_text for marker in decoder_markers)
+        and (
+            any(marker in error_text for marker in decoder_markers)
+            or "failed to configure input pad" in error_text
+        )
     )
 
 
@@ -182,8 +185,8 @@ def run_ffmpeg_thumbnail(
         return False
 
     pad_filter = (
-        f"scale=w='min({THUMB_WIDTH},iw*{THUMB_HEIGHT}/ih)':"
-        f"h='min({THUMB_HEIGHT},ih*{THUMB_WIDTH}/iw)',"
+        f"scale=w='if(gt(iw/ih,{THUMB_WIDTH}/{THUMB_HEIGHT}),{THUMB_WIDTH},-2)':"
+        f"h='if(gt(iw/ih,{THUMB_WIDTH}/{THUMB_HEIGHT}),-2,{THUMB_HEIGHT - 1})',"
         f"pad={THUMB_WIDTH}:{THUMB_HEIGHT}:(ow-iw)/2:(oh-ih)/2"
     )
 

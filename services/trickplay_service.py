@@ -229,8 +229,8 @@ def generate_trickplay(file_id, video_path):
 
             filter_expression = (
                 f"fps=1/{config.TRICKPLAY_INTERVAL_SECONDS},"
-                f"scale=w='min({config.TRICKPLAY_WIDTH},iw*{config.TRICKPLAY_HEIGHT}/ih)':"
-                f"h='min({config.TRICKPLAY_HEIGHT},ih*{config.TRICKPLAY_WIDTH}/iw)',"
+                f"scale=w='if(gt(iw/ih,{config.TRICKPLAY_WIDTH}/{config.TRICKPLAY_HEIGHT}),{config.TRICKPLAY_WIDTH},-2)':"
+                f"h='if(gt(iw/ih,{config.TRICKPLAY_WIDTH}/{config.TRICKPLAY_HEIGHT}),-2,{config.TRICKPLAY_HEIGHT})',"
                 f"pad={config.TRICKPLAY_WIDTH}:{config.TRICKPLAY_HEIGHT}:"
                 f"(ow-iw)/2:(oh-ih)/2"
             )
