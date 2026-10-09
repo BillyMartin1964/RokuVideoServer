@@ -18,7 +18,8 @@ from services import ffmpeg_service
 from services.video_service import get_file_id
 
 
-FFMPEG_THUMBNAIL_FATAL = "fatal"
+FFMPEG_THUMBNAIL_FATAL_STRUCTURE = "fatal_structure"
+FFMPEG_THUMBNAIL_FATAL_DECODER = "fatal_decoder"
 
 
 def _has_fatal_mp4_structure_error(stderr):
@@ -33,6 +34,29 @@ def _has_fatal_mp4_structure_error(stderr):
             "broken header",
         )
     )
+
+
+def _has_fatal_decoder_error(stderr):
+    """Recognize decoder corruption paired with the known filter failure."""
+    error_text = (stderr or "").lower()
+    decoder_markers = (
+        "reference picture missing",
+        "missing reference picture",
+        "mmco:",
+        "number of reference frames",
+    )
+    return (
+        "padded dimensions cannot be smaller than input dimensions" in error_text
+        and any(marker in error_text for marker in decoder_markers)
+    )
+
+
+def _fatal_thumbnail_error_kind(stderr):
+    if _has_fatal_mp4_structure_error(stderr):
+        return FFMPEG_THUMBNAIL_FATAL_STRUCTURE
+    if _has_fatal_decoder_error(stderr):
+        return FFMPEG_THUMBNAIL_FATAL_DECODER
+    return None
 
 
 def thumbnail_cache_path(file_path):
@@ -208,13 +232,21 @@ def run_ffmpeg_thumbnail(
         except Exception:
             stderr_snippet = "(could not read ffmpeg stderr)"
 
-        if _has_fatal_mp4_structure_error(stderr_snippet):
+        fatal_kind = _fatal_thumbnail_error_kind(stderr_snippet)
+        if fatal_kind == FFMPEG_THUMBNAIL_FATAL_STRUCTURE:
             log(
                 f"<!> Abandoning thumbnail generation for "
                 f"{os.path.basename(file_path)}: FFmpeg reported "
                 f"'moov atom not found' (invalid MP4 structure)."
             )
-            return FFMPEG_THUMBNAIL_FATAL
+            return fatal_kind
+        if fatal_kind == FFMPEG_THUMBNAIL_FATAL_DECODER:
+            log(
+                f"<!> Abandoning FFmpeg thumbnail seeks for "
+                f"{os.path.basename(file_path)}: decoder corruption "
+                f"caused the thumbnail filter to fail."
+            )
+            return fatal_kind
 
         log(
             f"<!> FFmpeg thumbnail fast-seek failed for {os.path.basename(file_path)}: returncode={result.returncode} stderr={stderr_snippet}"
@@ -268,13 +300,14 @@ def run_ffmpeg_thumbnail(
             except Exception:
                 stderr2 = "(could not read ffmpeg stderr)"
 
-            if _has_fatal_mp4_structure_error(stderr2):
+            fatal_kind = _fatal_thumbnail_error_kind(stderr2)
+            if fatal_kind:
                 log(
                     f"<!> Abandoning thumbnail generation for "
                     f"{os.path.basename(file_path)}: FFmpeg reported "
-                    f"'moov atom not found' (invalid MP4 structure)."
+                    f"an unrecoverable container or decoder error."
                 )
-                return FFMPEG_THUMBNAIL_FATAL
+                return fatal_kind
 
             log(
                 f"<!> FFmpeg thumbnail precise-seek also failed for {os.path.basename(file_path)}: returncode={result2.returncode} stderr={stderr2}"
@@ -445,8 +478,10 @@ def generate_thumbnail(file_path):
                 thumb_path,
                 seek_seconds,
             )
-            if thumbnail_result == FFMPEG_THUMBNAIL_FATAL:
+            if thumbnail_result == FFMPEG_THUMBNAIL_FATAL_STRUCTURE:
                 return None
+            if thumbnail_result == FFMPEG_THUMBNAIL_FATAL_DECODER:
+                break
             if thumbnail_result:
                 log(
                     f"--> Thumbnail generated successfully at "
