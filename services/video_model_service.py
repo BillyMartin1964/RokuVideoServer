@@ -8,7 +8,6 @@ from config import (
     THUMB_CACHE_DIR,
     THUMB_HEIGHT,
     THUMB_WIDTH,
-    THUMBNAIL_FALLBACK_PERCENT_STEP,
     THUMBNAIL_SEEK_SECONDS,
     THUMBNAIL_TIMEOUT_SECONDS,
     log,
@@ -45,6 +44,7 @@ def _has_fatal_decoder_error(stderr):
         "mmco:",
         "number of reference frames",
         "invalid nal unit size",
+        "missing picture in access unit",
         "error splitting the input into nal units",
         "decoding error",
         "cannot determine format of input",
@@ -61,8 +61,7 @@ def _has_fatal_decoder_error(stderr):
 def _fatal_thumbnail_error_kind(stderr):
     if _has_fatal_mp4_structure_error(stderr):
         return FFMPEG_THUMBNAIL_FATAL_STRUCTURE
-    if _has_fatal_decoder_error(stderr):
-        return FFMPEG_THUMBNAIL_FATAL_DECODER
+    # Decoder damage can be local to one seek position; try another position.
     return None
 
 
@@ -189,9 +188,13 @@ def run_ffmpeg_thumbnail(
         return False
 
     pad_filter = (
+        "trim=duration=3,setpts=PTS-STARTPTS,"
+        "blackframe=amount=0:threshold=32,"
+        "metadata=mode=select:key=lavfi.blackframe.pblack:value=95:function=less,"
         f"scale=w='if(gt(iw/ih,{THUMB_WIDTH}/{THUMB_HEIGHT}),{THUMB_WIDTH},-2)':"
         f"h='if(gt(iw/ih,{THUMB_WIDTH}/{THUMB_HEIGHT}),-2,{THUMB_HEIGHT - 1})',"
-        f"pad={THUMB_WIDTH}:{THUMB_HEIGHT}:(ow-iw)/2:(oh-ih)/2"
+        f"pad={THUMB_WIDTH}:{THUMB_HEIGHT}:(ow-iw)/2:(oh-ih)/2,"
+        "format=yuvj420p"
     )
 
     cmd = [
@@ -207,8 +210,12 @@ def run_ffmpeg_thumbnail(
         "1",
         "-vf",
         pad_filter,
+        "-threads:v",
+        "1",
         "-q:v",
         "3",
+        "-strict",
+        "unofficial",
         "-y",
         thumb_path,
     ]
@@ -273,8 +280,12 @@ def run_ffmpeg_thumbnail(
             "1",
             "-vf",
             pad_filter,
+            "-threads:v",
+            "1",
             "-q:v",
             "3",
+            "-strict",
+            "unofficial",
             "-y",
             thumb_path,
         ]
@@ -438,7 +449,6 @@ def run_quicklook_thumbnail(
 
 def generate_thumbnail(file_path):
     thumb_path = thumbnail_cache_path(file_path)
-    skip_quicklook = False
 
     if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
         return thumb_path
@@ -457,27 +467,19 @@ def generate_thumbnail(file_path):
         except (TypeError, ValueError):
             duration = None
 
-        # Determine the base seek time to try first:
-        # - Prefer the configured THUMBNAIL_SEEK_SECONDS when the video is longer.
-        # - When the video is shorter, try near the end of the video (90%).
-        if duration and duration > 0:
-            if duration >= THUMBNAIL_SEEK_SECONDS:
-                base_seek = float(THUMBNAIL_SEEK_SECONDS)
-            else:
-                # Use 90% of the duration to avoid hitting EOF exactly.
-                base_seek = max(0.5, duration * 0.9)
+        # Stay beyond the opening preview. For short clips use the middle
+        # and later portions, leaving some room before EOF.
+        base_seek = float(THUMBNAIL_SEEK_SECONDS)
+        if duration and 0 < duration <= base_seek + 3:
+            seek_times = [duration * fraction for fraction in (0.5, 0.6, 0.7, 0.8, 0.9)]
         else:
-            base_seek = float(THUMBNAIL_SEEK_SECONDS)
+            seek_times = [base_seek + offset for offset in (0, 9, 18, 27, 45, 60, 90)]
+            if duration and duration > 0:
+                seek_times = [seek for seek in seek_times if seek < duration - 1]
 
-        percent = 100
-
-        while percent >= 0:
-            seek_seconds = base_seek * percent / 100
-
+        for seek_seconds in seek_times:
             log(
-                f"--> Trying thumbnail at "
-                f"{percent}% of base seek time "
-                f"({seek_seconds:.1f} seconds) for "
+                f"--> Trying thumbnail at {seek_seconds:.1f} seconds for "
                 f"'{os.path.basename(file_path)}'..."
             )
 
@@ -487,28 +489,19 @@ def generate_thumbnail(file_path):
                 seek_seconds,
             )
             if thumbnail_result == FFMPEG_THUMBNAIL_FATAL_STRUCTURE:
-                skip_quicklook = True
                 break
             if thumbnail_result == FFMPEG_THUMBNAIL_FATAL_DECODER:
                 break
             if thumbnail_result:
                 log(
                     f"--> Thumbnail generated successfully at "
-                    f"{percent}% "
                     f"({seek_seconds:.1f} seconds) for "
                     f"'{os.path.basename(file_path)}'"
                 )
                 return thumb_path
 
-            percent -= THUMBNAIL_FALLBACK_PERCENT_STEP
-
-    if not skip_quicklook:
-        if run_quicklook_thumbnail(
-            file_path,
-            thumb_path,
-        ):
-            return thumb_path
-
+    # QuickLook does not accept a seek time and may return an opening preview.
+    # Use the neutral poster when no suitable timed frame can be extracted.
     if ensure_default_poster():
         return DEFAULT_POSTER_FILE
 

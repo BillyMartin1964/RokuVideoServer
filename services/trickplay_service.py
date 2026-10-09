@@ -251,6 +251,8 @@ def generate_trickplay(file_id, video_path):
                 filter_expression,
                 "-q:v",
                 "4",
+                "-strict",
+                "unofficial",
                 "-start_number",
                 "0",
                 output_pattern,
