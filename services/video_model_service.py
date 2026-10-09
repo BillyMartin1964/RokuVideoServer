@@ -18,6 +18,13 @@ from services import ffmpeg_service
 from services.video_service import get_file_id
 
 
+FFMPEG_THUMBNAIL_FATAL = "fatal"
+
+
+def _has_fatal_mp4_structure_error(stderr):
+    return "moov atom not found" in (stderr or "").lower()
+
+
 def thumbnail_cache_path(file_path):
     file_id = get_file_id(file_path)
     return os.path.join(THUMB_CACHE_DIR, f"{file_id}.jpg")
@@ -141,8 +148,8 @@ def run_ffmpeg_thumbnail(
         return False
 
     pad_filter = (
-        f"scale={THUMB_WIDTH}:{THUMB_HEIGHT}:"
-        "force_original_aspect_ratio=decrease,"
+        f"scale=w='min({THUMB_WIDTH},iw*{THUMB_HEIGHT}/ih)':"
+        f"h='min({THUMB_HEIGHT},ih*{THUMB_WIDTH}/iw)',"
         f"pad={THUMB_WIDTH}:{THUMB_HEIGHT}:(ow-iw)/2:(oh-ih)/2"
     )
 
@@ -190,6 +197,14 @@ def run_ffmpeg_thumbnail(
                 stderr_snippet = stderr_snippet[:1000] + "..."
         except Exception:
             stderr_snippet = "(could not read ffmpeg stderr)"
+
+        if _has_fatal_mp4_structure_error(stderr_snippet):
+            log(
+                f"<!> Abandoning thumbnail generation for "
+                f"{os.path.basename(file_path)}: FFmpeg reported "
+                f"'moov atom not found' (invalid MP4 structure)."
+            )
+            return FFMPEG_THUMBNAIL_FATAL
 
         log(
             f"<!> FFmpeg thumbnail fast-seek failed for {os.path.basename(file_path)}: returncode={result.returncode} stderr={stderr_snippet}"
@@ -242,6 +257,14 @@ def run_ffmpeg_thumbnail(
                     stderr2 = stderr2[:1000] + "..."
             except Exception:
                 stderr2 = "(could not read ffmpeg stderr)"
+
+            if _has_fatal_mp4_structure_error(stderr2):
+                log(
+                    f"<!> Abandoning thumbnail generation for "
+                    f"{os.path.basename(file_path)}: FFmpeg reported "
+                    f"'moov atom not found' (invalid MP4 structure)."
+                )
+                return FFMPEG_THUMBNAIL_FATAL
 
             log(
                 f"<!> FFmpeg thumbnail precise-seek also failed for {os.path.basename(file_path)}: returncode={result2.returncode} stderr={stderr2}"
@@ -407,11 +430,14 @@ def generate_thumbnail(file_path):
                 f"'{os.path.basename(file_path)}'..."
             )
 
-            if run_ffmpeg_thumbnail(
+            thumbnail_result = run_ffmpeg_thumbnail(
                 file_path,
                 thumb_path,
                 seek_seconds,
-            ):
+            )
+            if thumbnail_result == FFMPEG_THUMBNAIL_FATAL:
+                return None
+            if thumbnail_result:
                 log(
                     f"--> Thumbnail generated successfully at "
                     f"{percent}% "
