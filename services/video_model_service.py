@@ -44,12 +44,16 @@ def _has_fatal_decoder_error(stderr):
         "missing reference picture",
         "mmco:",
         "number of reference frames",
+        "invalid nal unit size",
+        "error splitting the input into nal units",
+        "decoding error",
+        "cannot determine format of input",
     )
     return (
-        "padded dimensions cannot be smaller than input dimensions" in error_text
-        and (
-            any(marker in error_text for marker in decoder_markers)
-            or "failed to configure input pad" in error_text
+        any(marker in error_text for marker in decoder_markers)
+        or (
+            "padded dimensions cannot be smaller than input dimensions" in error_text
+            and "failed to configure input pad" in error_text
         )
     )
 
@@ -434,6 +438,7 @@ def run_quicklook_thumbnail(
 
 def generate_thumbnail(file_path):
     thumb_path = thumbnail_cache_path(file_path)
+    skip_quicklook = False
 
     if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
         return thumb_path
@@ -482,7 +487,8 @@ def generate_thumbnail(file_path):
                 seek_seconds,
             )
             if thumbnail_result == FFMPEG_THUMBNAIL_FATAL_STRUCTURE:
-                return None
+                skip_quicklook = True
+                break
             if thumbnail_result == FFMPEG_THUMBNAIL_FATAL_DECODER:
                 break
             if thumbnail_result:
@@ -496,11 +502,12 @@ def generate_thumbnail(file_path):
 
             percent -= THUMBNAIL_FALLBACK_PERCENT_STEP
 
-    if run_quicklook_thumbnail(
-        file_path,
-        thumb_path,
-    ):
-        return thumb_path
+    if not skip_quicklook:
+        if run_quicklook_thumbnail(
+            file_path,
+            thumb_path,
+        ):
+            return thumb_path
 
     if ensure_default_poster():
         return DEFAULT_POSTER_FILE

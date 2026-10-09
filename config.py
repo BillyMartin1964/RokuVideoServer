@@ -113,6 +113,7 @@ IGNORED_DIRS = {
     ".spotlight-v100",
     ".fseventsd",
     ".temporaryitems",
+    "com.apple.timemachine.localsnapshots",
     "system volume information",
     "$recycle.bin",
     ".git",
