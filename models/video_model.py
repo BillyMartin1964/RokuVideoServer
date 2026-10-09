@@ -215,17 +215,18 @@ def create_video_model(
     # legacy value hide a valid size alias.  Negative sizes have appeared in
     # caches/clients after signed 32-bit conversion and are never valid on a
     # filesystem.
-    file_size_value = data.get("fileSize")
-    if file_size_value is None:
-        file_size_value = data.get("filesize")
-    if file_size_value is None:
-        file_size_value = data.get("size")
-    file_size_value = file_size_value or 0
-
-    try:
-        file_size = int(file_size_value)
-    except (TypeError, ValueError):
-        file_size = 0
+    file_size = 0
+    for key in ("fileSize", "filesize", "size"):
+        try:
+            candidate = int(data.get(key) or 0)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if candidate > 0:
+            file_size = candidate
+            break
+        # Retain a legacy signed value only if no positive alias is available.
+        if candidate < 0 and file_size == 0:
+            file_size = candidate
 
     # A negative byte count cannot come from the filesystem.  Older catalog
     # data (or a signed 32-bit client conversion) can leave an invalid value
