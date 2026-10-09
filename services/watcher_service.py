@@ -26,6 +26,7 @@ from services.video_service import (
     match_missing_video,
     queue_thumbnail_for_indexed_video,
     run_catalog_scan,
+    is_media_cache_path,
     save_disk_cache,
     save_missing_cache,
     video_fingerprint,
@@ -301,6 +302,8 @@ class MediaFileHandler(FileSystemEventHandler):
         path_lower = full_path.lower()
 
         if (
+            is_media_cache_path(full_path)
+            or
             any(
                 part.startswith(".")
                 for part in full_path.split("/")
@@ -366,6 +369,8 @@ class MediaFileHandler(FileSystemEventHandler):
         path_lower = dest_path.lower()
 
         if (
+            is_media_cache_path(dest_path)
+            or
             any(
                 part.startswith(".")
                 for part in dest_path.split("/")
@@ -409,6 +414,8 @@ class MediaFileHandler(FileSystemEventHandler):
         path_lower = full_path.lower()
 
         if (
+            is_media_cache_path(full_path)
+            or
             any(part.startswith(".") for part in full_path.split("/"))
             or any(ignored in path_lower for ignored in IGNORED_DIRS)
         ):

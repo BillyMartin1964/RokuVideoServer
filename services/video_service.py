@@ -33,6 +33,22 @@ _DIRECTORY_REFRESH_LOCK = threading.Lock()
 _DIRECTORY_REFRESH_IN_PROGRESS: set[tuple[str, str]] = set()
 
 
+def is_media_cache_path(path: str) -> bool:
+    """Return whether path is inside one of the configured generated-media caches."""
+    try:
+        normalized = os.path.realpath(path)
+        cache_roots = (
+            os.path.realpath(config.THUMB_CACHE_DIR),
+            os.path.realpath(config.TRICKPLAY_CACHE_DIR),
+        )
+        return any(
+            normalized == root or normalized.startswith(root + os.sep)
+            for root in cache_roots
+        )
+    except (OSError, TypeError):
+        return False
+
+
 def get_file_id(full_path: str) -> str:
     """Reuse a catalog ID for known paths; assign a UUID to new videos."""
     normalized_path = os.path.abspath(full_path).lower()
@@ -597,6 +613,9 @@ def try_spotlight_index_scan():
         for full_path in paths:
             path_lower = full_path.lower()
 
+            if is_media_cache_path(full_path):
+                continue
+
             if any(part.startswith(".") for part in full_path.split("/")):
                 continue
 
@@ -674,6 +693,8 @@ def safe_scan_directory(
     depth=0,
 ):
     if depth > 20:
+        return
+    if is_media_cache_path(current_dir):
         return
 
     try:
