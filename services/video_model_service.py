@@ -1,4 +1,6 @@
 import os
+import math
+import threading
 import shutil
 import subprocess
 import tempfile
@@ -67,7 +69,8 @@ def _fatal_thumbnail_error_kind(stderr):
 
 def thumbnail_cache_path(file_path):
     file_id = get_file_id(file_path)
-    return os.path.join(THUMB_CACHE_DIR, f"{file_id}.jpg")
+    # Keep legacy thumbnails intact, but regenerate them with timed capture.
+    return os.path.join(THUMB_CACHE_DIR, f"{file_id}.timed-v2.jpg")
 
 
 def create_default_poster_with_ffmpeg():
@@ -179,180 +182,69 @@ def ensure_default_poster():
     return create_default_poster_with_sips()
 
 
-def run_ffmpeg_thumbnail(
-    file_path,
-    thumb_path,
-    seek_seconds,
-):
+def run_ffmpeg_thumbnail(file_path, thumb_path, seek_seconds):
+    """Select a nonblack frame in a three-second window, publishing atomically."""
     if not ffmpeg_service.FFMPEG_PATH:
         return False
 
-    pad_filter = (
-        "trim=duration=3,setpts=PTS-STARTPTS,"
-        "blackframe=amount=0:threshold=32,"
-        "metadata=mode=select:key=lavfi.blackframe.pblack:value=95:function=less,"
-        f"scale=w='if(gt(iw/ih,{THUMB_WIDTH}/{THUMB_HEIGHT}),{THUMB_WIDTH},-2)':"
-        f"h='if(gt(iw/ih,{THUMB_WIDTH}/{THUMB_HEIGHT}),-2,{THUMB_HEIGHT - 1})',"
-        f"pad={THUMB_WIDTH}:{THUMB_HEIGHT}:(ow-iw)/2:(oh-ih)/2,"
-        "format=yuvj420p"
-    )
-
-    cmd = [
-        ffmpeg_service.FFMPEG_PATH,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-ss",
-        str(seek_seconds),
-        "-i",
-        file_path,
-        "-frames:v",
-        "1",
-        "-vf",
-        pad_filter,
-        "-threads:v",
-        "1",
-        "-q:v",
-        "3",
-        "-strict",
-        "unofficial",
-        "-y",
-        thumb_path,
-    ]
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=THUMBNAIL_TIMEOUT_SECONDS,
-            check=False,
-        )
-
-        success = (
-            result.returncode == 0
-            and os.path.exists(thumb_path)
-            and os.path.getsize(thumb_path) > 0
-        )
-
-        if success:
-            return True
-
-        # Log ffmpeg stderr for diagnostics (trim to reasonable length)
+    # The second attempt decodes five seconds of preroll to recover from a
+    # damaged keyframe. Seek BEFORE input; trim AFTER seeking, never after
+    # trimming the opening three seconds of the entire source.
+    for preroll in (0, min(5.0, seek_seconds)):
+        temporary_path = None
         try:
-            stderr_snippet = (result.stderr or "").strip()
-            if len(stderr_snippet) > 1000:
-                stderr_snippet = stderr_snippet[:1000] + "..."
-        except Exception:
-            stderr_snippet = "(could not read ffmpeg stderr)"
-
-        fatal_kind = _fatal_thumbnail_error_kind(stderr_snippet)
-        if fatal_kind == FFMPEG_THUMBNAIL_FATAL_STRUCTURE:
-            log(
-                f"<!> Abandoning thumbnail generation for "
-                f"{os.path.basename(file_path)}: FFmpeg reported "
-                f"'moov atom not found' (invalid MP4 structure)."
+            fd, temporary_path = tempfile.mkstemp(
+                suffix=".jpg", prefix=".capture-", dir=os.path.dirname(thumb_path)
             )
-            return fatal_kind
-        if fatal_kind == FFMPEG_THUMBNAIL_FATAL_DECODER:
-            log(
-                f"<!> Abandoning FFmpeg thumbnail seeks for "
-                f"{os.path.basename(file_path)}: decoder corruption "
-                f"caused the thumbnail filter to fail."
+            os.close(fd)
+            filters = (
+                f"trim=start={preroll}:duration=3,setpts=PTS-STARTPTS,"
+                "blackframe=amount=0:threshold=32,"
+                "metadata=mode=select:key=lavfi.blackframe.pblack:value=95:function=less,"
+                f"scale={THUMB_WIDTH}:{THUMB_HEIGHT - 1}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+                "format=yuvj444p,"
+                f"pad={THUMB_WIDTH}:{THUMB_HEIGHT}:(ow-iw)/2:(oh-ih)/2,"
+                "setsar=1,format=yuvj420p"
             )
-            return fatal_kind
-
-        log(
-            f"<!> FFmpeg thumbnail fast-seek failed for {os.path.basename(file_path)}: returncode={result.returncode} stderr={stderr_snippet}"
-        )
-
-        # Retry once using a precise seek (seek after input) which is slower
-        precise_cmd = [
-            ffmpeg_service.FFMPEG_PATH,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            file_path,
-            "-ss",
-            str(seek_seconds),
-            "-frames:v",
-            "1",
-            "-vf",
-            pad_filter,
-            "-threads:v",
-            "1",
-            "-q:v",
-            "3",
-            "-strict",
-            "unofficial",
-            "-y",
-            thumb_path,
-        ]
-
-        try:
-            result2 = subprocess.run(
-                precise_cmd,
-                capture_output=True,
-                text=True,
-                timeout=THUMBNAIL_TIMEOUT_SECONDS,
-                check=False,
+            cmd = [
+                ffmpeg_service.FFMPEG_PATH, "-hide_banner", "-loglevel", "error",
+                "-nostdin", "-ss", str(max(0, seek_seconds - preroll)),
+                "-i", file_path, "-map", "0:v:0", "-an", "-sn",
+                "-frames:v", "1", "-vf", filters, "-threads:v", "1",
+                "-q:v", "3", "-strict", "unofficial", "-y", temporary_path,
+            ]
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=THUMBNAIL_TIMEOUT_SECONDS, check=False,
             )
-
-            success2 = (
-                result2.returncode == 0
-                and os.path.exists(thumb_path)
-                and os.path.getsize(thumb_path) > 0
-            )
-
-            if success2:
-                log(
-                    f"--> FFmpeg precise-seek succeeded for {os.path.basename(file_path)} at {seek_seconds:.1f}s"
-                )
+            if result.returncode == 0 and os.path.getsize(temporary_path) > 0:
+                os.replace(temporary_path, thumb_path)
                 return True
 
-            try:
-                stderr2 = (result2.stderr or "").strip()
-                if len(stderr2) > 1000:
-                    stderr2 = stderr2[:1000] + "..."
-            except Exception:
-                stderr2 = "(could not read ffmpeg stderr)"
-
-            fatal_kind = _fatal_thumbnail_error_kind(stderr2)
+            error = (result.stderr or "").strip()
+            fatal_kind = _fatal_thumbnail_error_kind(error)
             if fatal_kind:
                 log(
-                    f"<!> Abandoning thumbnail generation for "
-                    f"{os.path.basename(file_path)}: FFmpeg reported "
-                    f"an unrecoverable container or decoder error."
+                    f"<!> Cannot read video container for {os.path.basename(file_path)}; "
+                    "repair or replace the source file. " + error[:300]
                 )
                 return fatal_kind
-
+            if result.returncode == 0:
+                log(f"--> No nonblack frame near {seek_seconds:.1f}s: {os.path.basename(file_path)}")
+                return False
             log(
-                f"<!> FFmpeg thumbnail precise-seek also failed for {os.path.basename(file_path)}: returncode={result2.returncode} stderr={stderr2}"
+                f"<!> Thumbnail capture at {seek_seconds:.1f}s "
+                f"(preroll {preroll:.1f}s) failed: {os.path.basename(file_path)}: "
+                + error[:300]
             )
-
-        except (
-            OSError,
-            subprocess.SubprocessError,
-            TimeoutError,
-        ) as ex2:
-            log(
-                f"<!> FFmpeg precise-seek raised exception for {os.path.basename(file_path)}: {type(ex2).__name__}: {ex2}"
-            )
-
-        return False
-
-    except (
-        OSError,
-        subprocess.SubprocessError,
-        TimeoutError,
-    ) as ex:
-        log(
-            f"<!> FFmpeg thumbnail extraction failed for "
-            f"{os.path.basename(file_path)}: "
-            f"{type(ex).__name__}: {ex}"
-        )
-        return False
+        except (OSError, subprocess.SubprocessError, TimeoutError) as ex:
+            log(f"<!> Thumbnail capture failed: {os.path.basename(file_path)}: {ex}")
+        finally:
+            if temporary_path and os.path.exists(temporary_path):
+                os.remove(temporary_path)
+        if seek_seconds == 0:
+            break
+    return False
 
 
 def run_quicklook_thumbnail(
@@ -447,11 +339,26 @@ def run_quicklook_thumbnail(
     return False
 
 
+# Serialize requests for the same source without retaining a lock per video.
+_THUMBNAIL_LOCKS = [threading.Lock() for _ in range(64)]
+_FAILED_SOURCES = {}
+
+
 def generate_thumbnail(file_path):
+    with _THUMBNAIL_LOCKS[hash(os.path.abspath(file_path)) % len(_THUMBNAIL_LOCKS)]:
+        return _generate_thumbnail(file_path)
+
+
+def _generate_thumbnail(file_path):
     thumb_path = thumbnail_cache_path(file_path)
 
     if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
         return thumb_path
+
+    source_stat = os.stat(file_path)
+    source_signature = (source_stat.st_size, source_stat.st_mtime_ns)
+    if _FAILED_SOURCES.get(file_path) == source_signature:
+        return DEFAULT_POSTER_FILE if ensure_default_poster() else None
 
     log_separator()
     log(f"THUMBNAIL REQUEST: {os.path.basename(file_path)}")
@@ -465,6 +372,9 @@ def generate_thumbnail(file_path):
         try:
             duration = float(duration) if duration is not None else None
         except (TypeError, ValueError):
+            duration = None
+
+        if duration is not None and (not math.isfinite(duration) or duration <= 0):
             duration = None
 
         # Stay beyond the opening preview. For short clips use the middle
@@ -499,6 +409,8 @@ def generate_thumbnail(file_path):
                     f"'{os.path.basename(file_path)}'"
                 )
                 return thumb_path
+
+    _FAILED_SOURCES[file_path] = source_signature
 
     # QuickLook does not accept a seek time and may return an opening preview.
     # Use the neutral poster when no suitable timed frame can be extracted.

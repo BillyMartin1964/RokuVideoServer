@@ -87,7 +87,7 @@ def initialize_ffmpeg():
     FFMPEG_PATH = find_ffmpeg()
     if not FFMPEG_PATH:
         log("<!> ffmpeg NOT FOUND.")
-        log("<!> Thumbnails will attempt macOS QuickLook fallback.")
+        log("<!> Timed thumbnails unavailable; a neutral poster will be used.")
     else:
         log(f"--> Found ffmpeg binary at: {FFMPEG_PATH}")
         if test_ffmpeg(FFMPEG_PATH):
