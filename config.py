@@ -1,5 +1,7 @@
 import logging
 import os
+import copy
+import re
 import sys
 import threading
 import time
@@ -231,6 +233,31 @@ def log(message: str) -> None:
     _logger.info(formatted_msg)
 
     sys.stdout.flush()
+
+
+class QuietRoutineUvicornAccessFilter(logging.Filter):
+    """Hide only successful health/drive polling requests from access logs."""
+
+    _routine_success = re.compile(
+        r'"GET /api/(?:health(?:\?[^ ]*)?|drives\?all=true) HTTP/[^\"]+" 2\d\d(?:\s|$)'
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not self._routine_success.search(record.getMessage())
+
+
+def uvicorn_log_config() -> dict:
+    """Return Uvicorn's normal logging config with narrow routine filtering."""
+    from uvicorn.config import LOGGING_CONFIG
+
+    log_config = copy.deepcopy(LOGGING_CONFIG)
+    log_config.setdefault("filters", {})[
+        "quiet_routine_access"
+    ] = {
+        "()": QuietRoutineUvicornAccessFilter,
+    }
+    log_config["handlers"]["access"]["filters"] = ["quiet_routine_access"]
+    return log_config
 
 
 def log_separator() -> None:

@@ -148,8 +148,13 @@ def thumbnail_worker() -> None:
                 generated_path = video_model_service.generate_thumbnail(file_path)
 
                 if generated_path:
+                    result_label = (
+                        "fallback poster used"
+                        if generated_path == config.DEFAULT_POSTER_FILE
+                        else "thumbnail generated"
+                    )
                     log(
-                        f"--> Background thumbnail complete: "
+                        f"--> Background thumbnail {result_label}: "
                         f"{os.path.basename(file_path)}"
                     )
                 else:
@@ -1570,4 +1575,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT,
         reload=False,
+        log_config=config.uvicorn_log_config(),
     )

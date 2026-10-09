@@ -22,7 +22,17 @@ FFMPEG_THUMBNAIL_FATAL = "fatal"
 
 
 def _has_fatal_mp4_structure_error(stderr):
-    return "moov atom not found" in (stderr or "").lower()
+    """Recognize container-structure failures that cannot be fixed by reseeking."""
+    error_text = (stderr or "").lower()
+    return any(
+        marker in error_text
+        for marker in (
+            "moov atom not found",
+            "missing mandatory atoms",
+            "contradictionary stsc and stco",
+            "broken header",
+        )
+    )
 
 
 def thumbnail_cache_path(file_path):
